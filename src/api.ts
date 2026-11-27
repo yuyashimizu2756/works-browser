@@ -456,6 +456,10 @@ export type WatchPending = {
 export type AppConfig = {
   /** #81: `timeline` は更新日のローカル日付ごとにまとめるタイムライン。 */
   view_mode: 'works' | 'files' | 'timeline'
+  /**
+   * #22: 互換のため残す旧キー。起動時のサムネイル表示には使わない
+   * （表示状態は保存せず、起動ごとに必ず非表示）。
+   */
   thumbnails_visible: boolean
   /** #22: グローバルホットキー（例 `Ctrl+Shift+P`）。 */
   shield_hotkey: string

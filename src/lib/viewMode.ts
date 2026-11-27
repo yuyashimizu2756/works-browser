@@ -69,11 +69,14 @@ export function initialViewModeFromUrl(search = window.location.search): Library
   return null
 }
 
-/** ベンチ用: `?thumbs=hidden` でサムネ非表示から開く。 */
+/**
+ * ベンチ用: `?thumbs=shown`（`visible` も可）でサムネ表示から、
+ * `?thumbs=hidden` でサムネ非表示から開く。
+ */
 export function initialThumbnailsFromUrl(search = window.location.search): boolean | null {
   const raw = new URLSearchParams(search).get('thumbs')
   if (raw === 'hidden' || raw === '0' || raw === 'false') return false
-  if (raw === 'shown' || raw === '1' || raw === 'true') return true
+  if (raw === 'shown' || raw === 'visible' || raw === '1' || raw === 'true') return true
   return null
 }
 

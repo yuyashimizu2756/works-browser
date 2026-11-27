@@ -26,10 +26,11 @@ describe('URL からの初期値（ベンチ / headless 用）', () => {
     expect(initialViewModeFromUrl('')).toBeNull()
   })
 
-  it('?thumbs= は hidden / shown の別名も受ける', () => {
+  it('?thumbs= は hidden / shown / visible の別名も受ける', () => {
     expect(initialThumbnailsFromUrl('?thumbs=hidden')).toBe(false)
     expect(initialThumbnailsFromUrl('?thumbs=0')).toBe(false)
     expect(initialThumbnailsFromUrl('?thumbs=shown')).toBe(true)
+    expect(initialThumbnailsFromUrl('?thumbs=visible')).toBe(true)
     expect(initialThumbnailsFromUrl('?thumbs=1')).toBe(true)
     expect(initialThumbnailsFromUrl('')).toBeNull()
   })

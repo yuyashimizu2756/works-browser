@@ -234,12 +234,13 @@ export default function App() {
   // #25: ダイアログ / ドラッグ&ドロップで受け取った、深さを選ぶ前の候補
   const [pending, setPending] = useState<PendingRoots | null>(null)
   const [dropActive, setDropActive] = useState(false)
-  // #21 の表示モードとサムネ表示トグル。`config.json` に保存して次回起動時に復元する。
+  // #21 の表示モード。`config.json` に保存して次回起動時に復元する。
   const [viewMode, setViewMode] = useState<LibraryViewMode>(
     () => forcedMode ?? localPreferences?.viewMode ?? 'works',
   )
-  // 起動時は必ずサムネ非表示から始める（前回の状態は復元しない）
-  const { thumbnailsVisible, setThumbnailsVisible, toggleThumbnails } = useThumbnailVisible(
+  // #22: 起動時は必ずサムネ非表示から始める（前回の状態は保存も復元もしない）。
+  // 例外は URL の `?thumbs=` とデモモード（`?bench&demo`）だけ。
+  const { thumbnailsVisible, toggleThumbnails } = useThumbnailVisible(
     forcedThumbnails ?? false,
   )
   // #52 / #121: サムネ非表示中に「このファイル / この作品だけ一時表示」する
@@ -329,7 +330,7 @@ export default function App() {
       .then((preferences) => {
         if (!alive) return
         if (forcedMode === null) setViewMode(preferences.viewMode)
-        if (forcedThumbnails === null) setThumbnailsVisible(preferences.thumbnailsVisible)
+        // #22: サムネイル表示は保存値を復元しない（起動時は必ず非表示）
         setShieldSettings(
           forcedShield.appearance
             ? { ...preferences.shield, appearance: forcedShield.appearance }
@@ -344,13 +345,13 @@ export default function App() {
     return () => {
       alive = false
     }
-  }, [activateShield, forcedMode, forcedShield, forcedThumbnails, setThumbnailsVisible])
+  }, [activateShield, forcedMode, forcedShield])
 
-  // 変更を config.json（と localStorage）へ保存する
+  // 変更を config.json（と localStorage）へ保存する（サムネ表示は保存しない）
   useEffect(() => {
     if (!preferencesReady) return
-    void savePreferences({ viewMode, thumbnailsVisible, shield: shieldSettings })
-  }, [preferencesReady, viewMode, thumbnailsVisible, shieldSettings])
+    void savePreferences({ viewMode, shield: shieldSettings })
+  }, [preferencesReady, viewMode, shieldSettings])
 
   // ホットキーの変更を Rust に登録し直す（衝突したら設定ダイアログに出す）
   useEffect(() => {

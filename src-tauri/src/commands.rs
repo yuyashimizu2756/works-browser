@@ -751,7 +751,8 @@ pub async fn generate_thumbs(
         limit: limit.unwrap_or(500).clamp(1, 5000) as usize,
         force: force.unwrap_or(false),
     };
-    // #21: サムネ非表示中は `generate` が早期に戻り、キャッシュへ書き込まない
+    // #21 / #22: サムネイル生成の安全弁（UI が非表示の間は生成しない）。
+    // 起動時の表示状態の復元には使わない（表示状態は保存しない）。
     let visible = config::load(&state.config_path).thumbnails_visible;
 
     let result = tauri::async_runtime::spawn_blocking(move || {
