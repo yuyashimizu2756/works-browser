@@ -98,6 +98,8 @@ pub fn run() {
             commands::clear_file_position,
             commands::reveal_file,
             commands::reveal_work,
+            commands::file_path,
+            commands::open_file,
             commands::library_stats,
             commands::search_files,
             commands::load_config,

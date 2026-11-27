@@ -120,6 +120,13 @@ fn work_info_is_light_and_work_path_is_resolved() {
         std::path::Path::new("C:\\root").join("作品A").join("a.mp4")
     );
     assert!(db::file_absolute_path(&conn, 999).unwrap().is_none());
+
+    // #24: UI に渡すコピー用の文字列も同じ解決（ルート実パス + 相対パス）。
+    assert_eq!(
+        db::file_absolute_path_text(&conn, 2).unwrap().as_deref(),
+        Some("C:\\root\\作品A\\a.mp4")
+    );
+    assert!(db::file_absolute_path_text(&conn, 999).unwrap().is_none());
 }
 
 #[test]

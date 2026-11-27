@@ -61,6 +61,8 @@ export function useScrubPreview({ enabled, duration, fileKey }: Options): ScrubP
   const frameTokenRef = useRef(0)
   /** コーデック非対応などで一度失敗したら、このファイルでは出さない。 */
   const failedRef = useRef(false)
+  /** #25: フレーム抽出の失敗理由は 1 ファイルにつき 1 回だけコンソールへ出す。 */
+  const warnedRef = useRef(false)
   const [preview, setPreview] = useState<ScrubPreview | null>(null)
 
   const seekerRef = useRef<ReturnType<typeof createScrubSeeker> | null>(null)
@@ -89,6 +91,7 @@ export function useScrubPreview({ enabled, duration, fileKey }: Options): ScrubP
   // ファイル切替・プレビュー不可（ベンチ / シールド / 再生エラー）で捨てる
   useEffect(() => {
     failedRef.current = false
+    warnedRef.current = false
     anchorRef.current = null
     seekerRef.current?.cancel()
     setPreview(null)
@@ -119,7 +122,23 @@ export function useScrubPreview({ enabled, duration, fileKey }: Options): ScrubP
 
     if (canvasRef.current === null) canvasRef.current = document.createElement('canvas')
     const frame = captureScrubFrame(video, canvasRef.current, SCRUB_PREVIEW_WIDTH)
-    if (!frame) return
+    if (!frame) {
+      // #25: canvas が taint されている（crossOrigin 不一致）・toDataURL 失敗など。
+      // プレビューは出さず、同じファイルでは繰り返し試さない。
+      if (!warnedRef.current) {
+        warnedRef.current = true
+        console.warn('[scrub-preview] フレームを取得できませんでした', {
+          currentSrc: video.currentSrc || video.getAttribute('src') || '',
+          crossOrigin: video.crossOrigin,
+          videoWidth: video.videoWidth,
+          videoHeight: video.videoHeight,
+          readyState: video.readyState,
+          errorCode: video.error?.code ?? null,
+          errorMessage: video.error?.message ?? null,
+        })
+      }
+      return
+    }
 
     const position = scrubPreviewPosition(
       anchor.x,
@@ -137,6 +156,20 @@ export function useScrubPreview({ enabled, duration, fileKey }: Options): ScrubP
 
   const handleError = useCallback(() => {
     failedRef.current = true
+    // #25: プレビュー用 `<video>` の読み込み失敗は本体の再生に影響させない。
+    // ただし原因（CORS / コーデック / ネットワーク）は追えるように残す。
+    const video = previewVideoRef.current
+    if (!warnedRef.current) {
+      warnedRef.current = true
+      console.warn('[scrub-preview] プレビュー動画を読み込めませんでした', {
+        currentSrc: video?.currentSrc || video?.getAttribute('src') || '',
+        crossOrigin: video?.crossOrigin ?? null,
+        errorCode: video?.error?.code ?? null,
+        errorMessage: video?.error?.message ?? null,
+        networkState: video?.networkState ?? null,
+        readyState: video?.readyState ?? null,
+      })
+    }
     cancel()
   }, [cancel])
 

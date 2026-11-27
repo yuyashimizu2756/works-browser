@@ -816,6 +816,10 @@ export const api = {
   /** エクスプローラでファイルを選択 / 作品フォルダを開く（#5）。 */
   revealFile: (fileId: number) => invoke<void>('reveal_file', { fileId }),
   revealWork: (workId: number) => invoke<void>('reveal_work', { workId }),
+  /** #24: ファイルのフルパス（Rust 側で解決。UI では組み立てない）。 */
+  filePath: (fileId: number) => invoke<string>('file_path', { fileId }),
+  /** #26: 既定のアプリ（外部プレイヤー）で開く。 */
+  openFile: (fileId: number) => invoke<void>('open_file', { fileId }),
   libraryStats: () => invoke<LibraryStats>('library_stats'),
   searchFiles: (query: string, limit = 100) =>
     invoke<FileEntry[]>('search_files', { query, limit }),

@@ -1828,6 +1828,14 @@ pub fn file_absolute_path(conn: &Connection, file_id: i64) -> Result<Option<Path
     Ok(row.map(|(root, rel)| join_root(&root, &rel)))
 }
 
+/// `files.id` から UI に渡すフルパス文字列を引く（#24）。
+///
+/// 解決方法は [`file_absolute_path`] と同じ（ルートの実パス + 相対パス）。
+/// コピー用に `String` で返すだけで、UI 側ではパスを組み立てない。
+pub fn file_absolute_path_text(conn: &Connection, file_id: i64) -> Result<Option<String>> {
+    Ok(file_absolute_path(conn, file_id)?.map(|path| path.to_string_lossy().into_owned()))
+}
+
 /// `works.id` から作品フォルダの絶対パスを引く。
 pub fn work_absolute_path(conn: &Connection, work_id: i64) -> Result<Option<PathBuf>> {
     let row: Option<(String, String)> = conn
