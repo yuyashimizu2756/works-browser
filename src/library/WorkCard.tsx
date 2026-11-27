@@ -292,10 +292,15 @@ export const WorkCard = memo(function WorkCard({
             }}
             onKeyDown={(event) => event.stopPropagation()}
             className={cn(
-              'absolute top-1.5 right-[38px] z-10 flex size-6 items-center justify-center rounded-md border border-white/15 backdrop-blur-sm transition-colors',
+              // #5: 非表示中は hover / focus のときだけ出す。タッチ環境（hover: none）は
+              // index.css の media query で常時表示に戻す。
+              'absolute top-1.5 right-[38px] z-10 flex size-6 items-center justify-center rounded-md border border-white/15 backdrop-blur-sm transition-[opacity,background-color,border-color,color]',
               individuallyRevealed
                 ? 'bg-[var(--root-accent)]/80 text-white'
                 : 'bg-black/60 text-white/75 hover:bg-black/80',
+              individuallyRevealed
+                ? 'opacity-100'
+                : 'pointer-events-none opacity-0 group-hover/card:pointer-events-auto group-hover/card:opacity-100 group-focus-within/card:pointer-events-auto group-focus-within/card:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100',
             )}
           >
             {individuallyRevealed ? (

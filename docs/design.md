@@ -229,6 +229,11 @@ brand `#7c6cff` on `--bg` **5.13:1**（いずれも 4.5:1 以上）。
 - ファイルの「このファイルだけ表示 / 隠す」と同じく、全体トグルを切り替えると
   個別状態はリセットされ、永続化しない
 - タイムラインは `WorkCard` を再利用するため、同じ位置・同じ挙動になる
+- **目アイコンは hover / focus のときだけ出す**（#5）。普段は `opacity: 0` +
+  `pointer-events: none` で、カードの `group-hover` / `group-focus-within` と
+  ボタン自身の `focus-visible` で表示する。キーボードの Tab でも見える
+- タッチ環境（`@media (hover: none)`、`index.css`）だけは常時表示に戻す。
+  チェックボックスの hover 表示は変更しない
 
 ### サイドバー（240px）
 
@@ -339,6 +344,12 @@ Phase 3。作品 1 件を開いた画面も同じトークンで組み直しま�
 
 - 余白は 16 / 24、文字は 12 / 13px、罫線は `--line` 相当の白 10%
 - ボタン位置・キー操作・既定ミュート（音量 0）・自動再生は変更しない
+- **`?` でショートカット一覧をライトボックスの上に開ける**（#5）。ヘルプの
+  オーバーレイは `z-120`、本体は `z-121` で、ライトボックス（`z-80`）と
+  ComfyUI の確認（`z-95`）より前面に置く
+- `Esc` の優先順位は **ヘルプ → ライトボックス → 作品詳細**。ヘルプ表示中は
+  ライトボックスのキー操作（再生・シーク・移動）もしない。ヘルプを閉じても
+  下のスクロール位置・選択は保持する
 
 ## 機能の到達性
 
@@ -369,7 +380,9 @@ Phase 1 で削った操作はありません。ヘッダーのテキストボタ
   `tests/keyboard-flow.test.tsx` で Enter / Esc / Alt+← の一覧 ↔ 詳細、
   `tests/library-filter-restore.test.tsx` でルート / 検索語の復元（#120）、
   `tests/library-thumb-toggle.test.tsx` でサムネトグルの `aria-pressed` / 全モード / 詳細同期、
-  `tests/work-card-reveal.test.tsx` で作品単位の個別表示と全体トグルでのリセット（#121））
+  `tests/work-card-reveal.test.tsx` で作品単位の個別表示と全体トグルでのリセット（#121）、
+  `tests/reveal-hover.test.tsx` で目アイコンの hover / focus 条件とタッチ用 CSS、
+  `tests/lightbox-help.test.tsx` でライトボックス中の `?` と Esc の優先順位（#5））
 - `npm run build`
 - `npm run visual:check`（headless Chrome。`D:\Projects\visual`）
   - ライブラリは **1280×800 と 1920×1080** の 2 サイズ（`library-1280x800.png` /

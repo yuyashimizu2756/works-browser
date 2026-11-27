@@ -8,6 +8,8 @@
  * 入力欄・選択欄・contenteditable にフォーカスがあるときは開かない
  * （判定は `shouldOpenHelp` = `isEditableTarget` と同じ入力ガード）。
  * 他のダイアログ（設定・比較・削除の確認など）が開いている間も重ねて開かない。
+ * ただしライトボックス（`data-lightbox`）だけは例外で、その上に最前面で開く（#5）。
+ * `Esc` は「ヘルプ → ライトボックス → 詳細」の順に 1 段ずつ閉じる。
  *
  * #116: 1280×800 でも最終行が切れないように、ダイアログ自体の高さを
  * `min(85vh, 760px)` で制限し、**本文だけ**を内部スクロールにする。
@@ -50,6 +52,18 @@ const SCROLL_END_EPSILON = 4
  */
 export function helpOpenFromUrl(search = window.location.search): boolean {
   return new URLSearchParams(search).get('help') === '1'
+}
+
+/**
+ * ヘルプを重ねて開かないダイアログがあるか。
+ *
+ * ライトボックス（`data-lightbox`）だけは例外で、その上にヘルプを出す（#5）。
+ * ライトボックス内の確認ダイアログなどは `data-lightbox` を持たないので従来どおり塞ぐ。
+ */
+export function hasBlockingDialog(root: ParentNode = document): boolean {
+  return Array.from(root.querySelectorAll<HTMLElement>('[role="dialog"]')).some(
+    (dialog) => !dialog.hasAttribute('data-lightbox'),
+  )
 }
 
 /** 一覧そのもの（テスト・将来の「ヘルプ」ボタンからも使えるように分離）。 */
@@ -125,7 +139,9 @@ export function ShortcutsDialog({ open, onOpenChange }: DialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="flex max-h-[min(85vh,760px)] w-full flex-col gap-0 sm:max-w-2xl"
+        // #5: ライトボックス（z-80）やその確認ダイアログ（z-95）より最前面に出す。
+        overlayClassName="z-[120]"
+        className="z-[121] flex max-h-[min(85vh,760px)] w-full flex-col gap-0 sm:max-w-2xl"
         data-shortcuts-dialog
       >
         <DialogHeader className="shrink-0 gap-2 border-b border-border/60 pb-4">
@@ -233,7 +249,8 @@ export function ShortcutsHelp() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return
       // 設定・比較・削除の確認などのダイアログ表示中は重ねない
-      if (document.querySelector('[role="dialog"]')) return
+      // （ライトボックスだけは例外。その上にヘルプを出す。#5）
+      if (hasBlockingDialog()) return
       if (!shouldOpenHelp(event, event.target)) return
       event.preventDefault()
       setOpen(true)
