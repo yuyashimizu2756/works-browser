@@ -40,6 +40,7 @@ import { defaultFileDirFor } from './sortPrefs'
 import { SortMenu, ThumbnailToggle } from './Toolbar'
 import type { FilePageSource } from './useFileFeed'
 import { dbWorkFileSource, useFileFeed, WORK_FILE_PAGE_SIZE } from './useFileFeed'
+import { lightboxVisualFromUrl } from './visualLightbox'
 
 /**
  * #49: ライトボックスは開くまで読み込まない（初期チャンク削減）。
@@ -132,6 +133,8 @@ export function WorkDetail({
   onLightboxIndexChange,
 }: Props) {
   const [summary, setSummary] = useState<WorkSummary>(work)
+  /** #8: 「パスをコピー」用（ルートの実パス）。ベンチ / 取得失敗では null。 */
+  const [rootRealPath, setRootRealPath] = useState<string | null>(null)
   const [kind, setKind] = useState<FileKindFilter>('all')
   const [sort, setSort] = useState<FileSortKey>('name')
   const [dir, setDir] = useState<SortDir>(() => defaultFileDirFor('name'))
@@ -152,6 +155,9 @@ export function WorkDetail({
   )
   const [pendingStart, setPendingStart] = useState<number | null>(startFileId ?? null)
   const anchorRef = useRef<number | null>(null)
+  // #8: `?lightbox=1`（visual:check のスクショ用）。ベンチのときだけ効く。
+  const visualLightbox = useMemo(() => (bench ? lightboxVisualFromUrl() : null), [bench])
+  const [visualApplied, setVisualApplied] = useState(false)
 
   const feed = useFileFeed({
     query: { search: '', kind, rootId: null, sort, dir, workId: work.id },
@@ -167,7 +173,9 @@ export function WorkDetail({
     void api
       .getWorkSummary(work.id)
       .then((info) => {
-        if (alive) setSummary(info.work)
+        if (!alive) return
+        setSummary(info.work)
+        setRootRealPath(info.root_real_path)
       })
       .catch(() => {
         // 取得できなくても一覧は表示できる
@@ -377,6 +385,18 @@ export function WorkDetail({
     }
     if (feed.status !== 'loading') feed.loadMore()
   }, [feed.files, feed.hasMore, feed.loadMore, feed.status, pendingStart])
+
+  /**
+   * #8: `?lightbox=1` のスクショ用。ファイルが 1 件でも読めたら先頭の画像を開く
+   * （動画しか無い作品では先頭）。ユーザー操作ではないので、1 回だけ適用する。
+   */
+  useEffect(() => {
+    if (!visualLightbox?.open || visualApplied) return
+    if (lightboxIndex !== null || feed.files.length === 0) return
+    const imageIndex = feed.files.findIndex((file) => file.kind === 'image')
+    setLightboxIndex(imageIndex >= 0 ? imageIndex : 0)
+    setVisualApplied(true)
+  }, [feed.files, lightboxIndex, setLightboxIndex, visualApplied, visualLightbox])
 
   /** エクスプローラで開く。`file` を渡すとそのファイルを選択状態で表示する。 */
   const revealTarget = useCallback(
@@ -712,6 +732,14 @@ export function WorkDetail({
             onClose={() => setLightboxIndex(null)}
             bench={bench}
             shielded={shielded}
+            workId={work.id}
+            // ベンチは合成データなので実パスが無い。スクショ用に固定の例を渡す。
+            rootRealPath={bench ? 'D:\\bench\\synthetic' : rootRealPath}
+            onDeleteFile={
+              onDeleteSelected
+                ? (file) => onDeleteSelected([file], { permanent: false })
+                : undefined
+            }
           />
         </Suspense>
       )}

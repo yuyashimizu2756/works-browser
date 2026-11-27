@@ -142,11 +142,14 @@ npm run visual:check -- --strict
 
 1. `npm run build`（型チェック + Vite ビルド）
 2. `vite preview --port 4173 --host 127.0.0.1` を起動
-3. headless Chrome（`--headless=new`）で次の 5 画面を 1440×900 で撮影
+3. headless Chrome（`--headless=new`）で画面を撮影（既定はライブラリ 2 サイズ + 詳細・ヘルプ・
+   空状態・ライトボックス）
    - ライブラリ: `/?bench=24`
    - 作品詳細: `/?bench=24&detail=3`
    - ライブラリ（デモ画像つき）: `/?bench=24&demo=1`
    - 作品詳細（デモ画像つき）: `/?bench=24&demo=1&detail=3`
+   - ライトボックス（#8）: `/?bench=24&demo=1&detail=3&thumbs=shown&lightbox=1`
+     （`&lightboxMenu=1` / `&lightboxMeta=1` でメニュー・生成情報パネルを開いた状態）
    - シールド: `/?bench=24&shield=1`
 4. `D:\Projects\visual\<name>.png` に保存
 5. 前回の `<name>.png` とピクセル単位で比較し、差が **2% 超**なら警告

@@ -49,6 +49,8 @@ export function DeleteConfirmDialog({
   onClose,
   onConfirm,
   onCancelRunning,
+  overlayClassName,
+  contentClassName,
 }: {
   request: DeleteRequest | null
   busy: boolean
@@ -56,6 +58,9 @@ export function DeleteConfirmDialog({
   onClose: () => void
   onConfirm: (permanent: boolean) => void
   onCancelRunning: () => void
+  /** #8: ライトボックス（z-80）の上に出すための重なり順。 */
+  overlayClassName?: string
+  contentClassName?: string
 }) {
   const [permanent, setPermanent] = useState(request?.permanent ?? false)
 
@@ -79,6 +84,8 @@ export function DeleteConfirmDialog({
       }}
     >
       <DialogContent
+        overlayClassName={overlayClassName}
+        className={contentClassName}
         showCloseButton={!busy}
         data-delete-dialog
         data-permanent={permanent ? 'true' : 'false'}
@@ -170,9 +177,14 @@ export function DeleteConfirmDialog({
 export function DeleteReportDialog({
   result,
   onClose,
+  overlayClassName,
+  contentClassName,
 }: {
   result: DeleteResult | null
   onClose: () => void
+  /** #8: ライトボックス（z-80）の上に出すための重なり順。 */
+  overlayClassName?: string
+  contentClassName?: string
 }) {
   const groups = useMemo(() => {
     const map = new Map<string, { count: number; ids: number[] }>()
@@ -189,7 +201,11 @@ export function DeleteReportDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent data-delete-report>
+      <DialogContent
+        overlayClassName={overlayClassName}
+        className={contentClassName}
+        data-delete-report
+      >
         <DialogHeader>
           <DialogTitle>
             {result.failed.length > 0 ? '一部のファイルを削除できませんでした' : '削除しました'}

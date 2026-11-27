@@ -53,6 +53,22 @@ const SHOTS = [
   { name: 'library-demo', path: '/?bench=24&demo=1', sizes: GRID_SIZES },
   { name: 'detail', path: '/?bench=24&detail=3&thumbs=shown', sizes: [DEFAULT_SIZE] },
   { name: 'detail-demo', path: '/?bench=24&demo=1&detail=3', sizes: [DEFAULT_SIZE] },
+  // #8: ライトボックスの上部バー / `⋯` メニュー / 生成情報パネル（ベンチの URL 指定）
+  {
+    name: 'lightbox',
+    path: '/?bench=24&demo=1&detail=3&thumbs=shown&lightbox=1',
+    sizes: [DEFAULT_SIZE],
+  },
+  {
+    name: 'lightbox-menu',
+    path: '/?bench=24&demo=1&detail=3&thumbs=shown&lightbox=1&lightboxMenu=1',
+    sizes: [DEFAULT_SIZE],
+  },
+  {
+    name: 'lightbox-meta',
+    path: '/?bench=24&demo=1&detail=3&thumbs=shown&lightbox=1&lightboxMeta=1',
+    sizes: [DEFAULT_SIZE],
+  },
   { name: 'shield', path: '/?bench=24&shield=1', sizes: [DEFAULT_SIZE] },
   // #116: ヘルプ（`?`）は 1280×800 でも最終行が切れず、下端のフェードで続きが分かる
   { name: 'help', path: '/?bench=24&thumbs=hidden&help=1', sizes: GRID_SIZES },

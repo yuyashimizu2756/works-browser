@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Loader2, Plus, Sparkles, Tag as TagIcon, Trash2 } from 'lucide-react'
+import { cn } from 'cn'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -34,11 +35,22 @@ type Props = {
   /** 保存・削除のあと（フィルタや一覧の読み直しに使う）。 */
   onChanged?: () => void
   disabled?: boolean
+  /** #8: ライトボックス（z-80）の上に出すための重なり順。 */
+  overlayClassName?: string
+  contentClassName?: string
 }
 
 const DEFAULT_COLOR = '#22d3ee'
 
-export function TagEditor({ open, onOpenChange, workIds, onChanged, disabled = false }: Props) {
+export function TagEditor({
+  open,
+  onOpenChange,
+  workIds,
+  onChanged,
+  disabled = false,
+  overlayClassName,
+  contentClassName,
+}: Props) {
   const [tags, setTags] = useState<Tag[]>([])
   const [selected, setSelected] = useState<Set<number>>(new Set())
   // #79: 生成情報の頻出語から出したタグ候補（1 作品のときだけ）
@@ -198,7 +210,11 @@ export function TagEditor({ open, onOpenChange, workIds, onChanged, disabled = f
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md" data-tag-editor>
+      <DialogContent
+        overlayClassName={overlayClassName}
+        className={cn('max-w-md', contentClassName)}
+        data-tag-editor
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-1.5">
             <TagIcon className="size-4" aria-hidden="true" />

@@ -1,16 +1,23 @@
-﻿import { useCallback, useEffect, useRef, useState } from 'react'
-import type { PointerEvent as ReactPointerEvent } from 'react'
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import {
   ChevronLeft,
   ChevronRight,
+  Copy,
   Film,
+  FolderOpen,
+  Heart,
   ImageIcon,
   Info,
   Maximize,
   Minimize,
+  MonitorPlay,
+  MoreHorizontal,
   Pause,
   Play,
   RefreshCw,
+  Tag as TagIcon,
+  Trash2,
   Volume2,
   VolumeX,
   Wand2,
@@ -19,14 +26,20 @@ import {
 import { cn } from 'cn'
 import { Button } from '@/components/ui/button'
 import { api } from '../api'
-import type { FileSummary } from '../api'
+import type { FileSummary, WorkMark } from '../api'
 import type { GenerationMeta } from '../api'
 import { formatBytes, formatDuration, formatShortDate, describeError } from '../lib/format'
+import { fileAbsolutePath } from '../lib/path'
+import { matchesShortcut } from '../lib/shortcuts'
 import { volumeAfterMuteToggle, volumeAfterSlider } from '../lib/volume'
 import { readPlaybackPreference, rememberPlayback } from '../settings/playback'
 import { canQueuePrompt, comfyActionFor } from './comfy'
 import { imageSrc, mediaSrc } from './mediaSrc'
+import { RatingStars } from './RatingStars'
+import { emptyMark, notifyMarkChanged, notifyTagsChanged, tagData } from './tagData'
+import { TagEditor } from './TagEditor'
 import { useScrubPreview } from './useScrubPreview'
+import { lightboxVisualFromUrl } from './visualLightbox'
 
 type Props = {
   /** 読み込み済みのファイル（並び順はグリッドと同じ）。 */
@@ -46,6 +59,12 @@ type Props = {
    * `pause()` + `muted = true` にする（再生位置と再生状態を復帰できるように）。
    */
   shielded?: boolean
+  /** #8: お気に入り・評価・タグは作品単位。未指定ならその操作を出さない。 */
+  workId?: number
+  /** #8: ルートの実パス（「パスをコピー」用。ベンチでは null）。 */
+  rootRealPath?: string | null
+  /** #8: 「ゴミ箱へ」。確認と Undo は App の既存フローに任せる。 */
+  onDeleteFile?: (file: FileSummary) => void
 }
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
@@ -56,6 +75,28 @@ const MIN_RESUME_MS = 3_000
 /** 終端からこの距離まで来たら「見終わった」として位置を消す。 */
 const END_GUARD_MS = 2_000
 const SAVE_INTERVAL_MS = 5_000
+/** #8: スライドショーの送り間隔（画像）。動画は再生完了で次へ。 */
+const SLIDESHOW_INTERVAL_MS = 3_000
+/** #8: 解除・コピーなどの短い通知を出しておく時間。 */
+const NOTICE_MS = 3_000
+
+/** #8: ベンチ / スクショ用のサンプル生成情報（実ファイルが無いため）。 */
+const BENCH_META: GenerationMeta = {
+  prompt:
+    '1girl, silver hair, blue eyes, night city, neon signs, cinematic lighting, looking at viewer, masterpiece, best quality',
+  negative_prompt: 'lowres, bad anatomy, bad hands, text, watermark',
+  model: 'sdxl_base_1.0',
+  loras: ['detail_tweaker_v2', 'neon_night'],
+  steps: '28',
+  sampler: 'DPM++ 2M Karras',
+  cfg: '5.5',
+  seed: '1234567890',
+  size: '1024x1024',
+  raw: null,
+  source: 'bench',
+  workflow_json: null,
+  api_prompt: null,
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
@@ -67,10 +108,12 @@ function secondsText(value: number): string {
 }
 
 /**
- * ライトボックス / プレイヤー（#5）。
+ * ライトボックス / プレイヤー（#5 / #8）。
  *
  * - 画像: `←` / `→` で移動、ホイールでズーム、`0` で原寸、`F` で全画面、`Esc` で閉じる
  * - 動画: `Space` 再生 / 停止、`←` / `→` ±5 秒、`Shift+←` / `→` 前後ファイル
+ * - #8: 上部バー / `⋯` からお気に入り（`Shift+F`）・評価（`1`〜`5` / `Shift+0`）・
+ *   タグ（`T`）・生成情報（`I`）・スライドショー（`S`）・フォルダ / パス / ゴミ箱
  * - 動画の再生位置は 5 秒ごと・一時停止 / シーク / 閉じる時に保存し、次回は続きから
  * - 動画のシークバー上では、カーソル地点のフレームを 150ms 後に小さくプレビュー（#47）
  * - 画像は現在 ±3 枚を先読み
@@ -88,10 +131,16 @@ export function Lightbox({
   onClose,
   bench,
   shielded = false,
+  workId,
+  rootRealPath,
+  onDeleteFile,
 }: Props) {
   const file: FileSummary | undefined = files[index]
   const containerRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  /** #8: `?lightboxMeta=1` などのスクショ用初期状態（ベンチのみ）。 */
+  const visualLightbox = useMemo(() => (bench ? lightboxVisualFromUrl() : null), [bench])
 
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -109,7 +158,7 @@ export function Lightbox({
   const [muted, setMuted] = useState(initialPlayback.current.muted)
   const [resumeMs, setResumeMs] = useState<number | null>(null)
   // #60: 生成メタデータ（プロンプト・モデル等）の表示
-  const [metaOpen, setMetaOpen] = useState(false)
+  const [metaOpen, setMetaOpen] = useState(visualLightbox?.meta ?? false)
   const [meta, setMeta] = useState<GenerationMeta | null>(null)
   const [metaLoading, setMetaLoading] = useState(false)
   // #73: ComfyUI 連携（workflow を開く / API 形式をコピー / この設定で再実行）
@@ -118,6 +167,29 @@ export function Lightbox({
   const [comfyError, setComfyError] = useState<string | null>(null)
   const [comfyJson, setComfyJson] = useState<string | null>(null)
   const [confirmQueue, setConfirmQueue] = useState(false)
+  // #8: 作品単位のマーク（お気に入り・評価）とタグ編集
+  const [mark, setMark] = useState<WorkMark | null>(null)
+  const [markBusy, setMarkBusy] = useState(false)
+  const [tagsOpen, setTagsOpen] = useState(false)
+  // #8: `⋯` メニューとスライドショー、短い通知（音声・コピー）
+  const [menuOpen, setMenuOpen] = useState(visualLightbox?.menu ?? false)
+  const [slideshow, setSlideshow] = useState(visualLightbox?.slideshow ?? false)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [audioNotice, setAudioNotice] = useState<string | null>(null)
+
+  /**
+   * #10: `<video>` に適用する値の「現在値」。`onLoadedMetadata` は React の
+   * レンダー時点の値を閉じ込めず、必ずこの ref を読む（メタデータ到着が
+   * ミュート解除より後になっても解除が巻き戻らない）。
+   */
+  const volumeRef = useRef(volume)
+  const mutedRef = useRef(muted)
+  const rateRef = useRef(rate)
+  const shieldedRef = useRef(shielded)
+  volumeRef.current = volume
+  mutedRef.current = muted
+  rateRef.current = rate
+  shieldedRef.current = shielded
 
   /** 保存用のスナップショット（アンマウント時に video 要素が無くても保存できる）。 */
   const snapshot = useRef<{ fileId: number | null; positionMs: number; durationMs: number | null }>(
@@ -132,11 +204,85 @@ export function Lightbox({
   const fileKind = file?.kind
   const fileId = file?.id ?? null
   const direct = file ? mediaSrc(file.id) : null
+  const absolutePath = useMemo(
+    () => (file ? fileAbsolutePath(rootRealPath, file.rel_path) : null),
+    [file, rootRealPath],
+  )
 
   // #47: プレビュー専用の `<video>`（本体とは別要素・ミュート固定）。
   // ベンチ / シールド / 再生エラー中は出さない。ファイルが変われば破棄される。
   const scrubEnabled = fileKind === 'video' && !bench && !shielded && !videoError
   const scrub = useScrubPreview({ enabled: scrubEnabled, duration, fileKey: fileId })
+
+  /**
+   * #10: `<video>` の実プロパティを状態から 1 箇所で反映する。
+   * デバッグ用に、**実際に反映された値**を `data-video-muted` / `data-video-volume`
+   * へ読み戻す（テスト・実機確認用）。
+   */
+  const applyVideoState = useCallback(() => {
+    const video = videoRef.current
+    if (!video) return
+    video.volume = volumeRef.current
+    video.muted = shieldedRef.current ? true : mutedRef.current
+    video.playbackRate = rateRef.current
+    video.dataset.videoMuted = String(video.muted)
+    video.dataset.videoVolume = video.volume.toFixed(2)
+  }, [])
+
+  // #10: 音量・ミュート・速度・シールドの変更はこの 1 本だけで `<video>` に反映する。
+  useEffect(() => {
+    applyVideoState()
+  }, [applyVideoState, volume, muted, rate, shielded, fileId])
+
+  // #10: WebView2 側で `volume` が変わっても data 属性が実値に追随するようにする。
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    const onVolumeChange = () => {
+      video.dataset.videoMuted = String(video.muted)
+      video.dataset.videoVolume = video.volume.toFixed(2)
+    }
+    video.addEventListener('volumechange', onVolumeChange)
+    return () => video.removeEventListener('volumechange', onVolumeChange)
+  }, [fileId, fileKind])
+
+  const showNotice = useCallback((message: string) => {
+    setNotice(message)
+  }, [])
+
+  // 短い通知は自動で消す（同じ文言を続けて出しても張り直す）
+  useEffect(() => {
+    if (!notice) return
+    const timer = window.setTimeout(() => setNotice(null), NOTICE_MS)
+    return () => window.clearTimeout(timer)
+  }, [notice])
+
+  useEffect(() => {
+    if (!audioNotice) return
+    const timer = window.setTimeout(() => setAudioNotice(null), NOTICE_MS)
+    return () => window.clearTimeout(timer)
+  }, [audioNotice])
+
+  // #8: 作品のマーク（お気に入り・評価）を読む
+  useEffect(() => {
+    if (workId === undefined) {
+      setMark(null)
+      return
+    }
+    let alive = true
+    setMark(emptyMark(workId))
+    void tagData()
+      .getWorkMark(workId)
+      .then((next) => {
+        if (alive) setMark(next)
+      })
+      .catch(() => {
+        // 読めなくても閲覧は続けられる
+      })
+    return () => {
+      alive = false
+    }
+  }, [workId])
 
   const saveSnapshot = useCallback(() => {
     const state = snapshot.current
@@ -209,25 +355,30 @@ export function Lightbox({
   // #22: シールド中は音を止め、解除時に再生状態（位置・ミュート）へ戻す。
   // `<video>` は DOM に残すので currentTime はそのまま。`silenceVideos` が
   // 付けた dataset から「シールド前に再生中だったか」を読む。
+  // ミュートの実値は #10 の `applyVideoState` が `shielded` から決める。
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
     if (shielded) {
       shieldWasPlaying.current = video.dataset.shieldWasPlaying === '1'
       video.pause()
-      video.muted = true
       return
     }
     if (shieldWasPlaying.current) {
-      video.muted = video.dataset.shieldWasMuted === '1'
       void video.play().catch(() => undefined)
       shieldWasPlaying.current = false
     }
-  }, [shielded])
+  }, [shielded, applyVideoState])
 
   // #60: パネルを開いたときにだけ生成情報を抽出する（走査時には読まない）
   useEffect(() => {
     if (!metaOpen || !file) return
+    if (bench) {
+      // ベンチは合成データなのでサンプルを出す（スクショ / デザイン確認用）
+      setMeta(BENCH_META)
+      setMetaLoading(false)
+      return
+    }
     let alive = true
     setMetaLoading(true)
     setMeta(null)
@@ -245,7 +396,7 @@ export function Lightbox({
     return () => {
       alive = false
     }
-  }, [metaOpen, file])
+  }, [bench, metaOpen, file])
 
   // #73: 「ComfyUI へ」。workflow は保存してブラウザで開き、API 形式はコピーする。
   const openInComfy = useCallback(async () => {
@@ -337,23 +488,20 @@ export function Lightbox({
     else video.pause()
   }, [bench])
 
-  const seekBy = useCallback(
-    (seconds: number) => {
-      const video = videoRef.current
-      if (!video) return
-      const max = Number.isFinite(video.duration) ? video.duration : 0
-      video.currentTime = clamp(video.currentTime + seconds, 0, Math.max(0, max))
-    },
-    [],
-  )
+  const seekBy = useCallback((seconds: number) => {
+    const video = videoRef.current
+    if (!video) return
+    const max = Number.isFinite(video.duration) ? video.duration : 0
+    video.currentTime = clamp(video.currentTime + seconds, 0, Math.max(0, max))
+  }, [])
 
   const toggleFullscreen = useCallback(() => {
     const element = containerRef.current
     if (!element) return
     if (document.fullscreenElement) {
-      void document.exitFullscreen().catch(() => undefined)
+      void document.exitFullscreen?.()?.catch?.(() => undefined)
     } else {
-      void element.requestFullscreen().catch(() => undefined)
+      void element.requestFullscreen?.()?.catch?.(() => undefined)
     }
   }, [])
 
@@ -363,6 +511,150 @@ export function Lightbox({
     return () => document.removeEventListener('fullscreenchange', onChange)
   }, [])
 
+  // ---------------------------------------------------------------------------
+  // #8: お気に入り・評価・タグ・メタ・スライドショー・メニュー
+  // ---------------------------------------------------------------------------
+
+  /** 作品マークを 1 項目だけ変えて即保存する（評価・お気に入りは作品単位）。 */
+  const changeMark = useCallback(
+    (next: { favorite: boolean; rating: number | null }) => {
+      if (workId === undefined) return
+      setMarkBusy(true)
+      setMark((current) => (current ? { ...current, ...next } : current))
+      void tagData()
+        .setWorkMark(workId, {
+          favorite: next.favorite,
+          rating: next.rating,
+          note: mark?.note ?? null,
+        })
+        .then((saved) => {
+          setMark(saved)
+          // 詳細ヘッダ（WorkMarksBar）とライブラリの評価フィルタへ知らせる
+          notifyMarkChanged(workId)
+          notifyTagsChanged()
+        })
+        .catch((cause: unknown) => {
+          showNotice(`保存できませんでした: ${describeError(cause)}`)
+        })
+        .finally(() => setMarkBusy(false))
+    },
+    [mark?.note, showNotice, workId],
+  )
+
+  const toggleFavorite = useCallback(() => {
+    if (!mark) return
+    changeMark({ favorite: !mark.favorite, rating: mark.rating })
+    showNotice(mark.favorite ? 'お気に入りから外しました' : 'お気に入りに追加しました')
+  }, [changeMark, mark, showNotice])
+
+  const applyRating = useCallback(
+    (rating: number | null) => {
+      if (!mark) return
+      changeMark({ favorite: mark.favorite, rating })
+      showNotice(rating === null ? '未評価に戻しました' : `★${rating} に評価しました`)
+    },
+    [changeMark, mark, showNotice],
+  )
+
+  /** #10: ミュート解除時は音量 0 なら既定音量まで上げる（`volumeAfterMuteToggle`）。 */
+  const toggleMute = useCallback(() => {
+    const next = volumeAfterMuteToggle({ volume, muted })
+    setVolume(next.volume)
+    setMuted(next.muted)
+    rememberPlayback(next.volume, next.muted)
+    if (next.muted) {
+      setAudioNotice('ミュートにしました')
+      return
+    }
+    if (next.volume <= 0) {
+      setAudioNotice('音量が 0 のため音が出ません。音量スライダーで上げてください')
+    } else {
+      setAudioNotice(`音声をオンにしました（音量 ${Math.round(next.volume * 100)}%）`)
+    }
+  }, [muted, volume])
+
+  const changeVolume = useCallback((value: number) => {
+    const next = volumeAfterSlider(value)
+    setVolume(next.volume)
+    setMuted(next.muted)
+    rememberPlayback(next.volume, next.muted)
+  }, [])
+
+  const toggleSlideshow = useCallback(() => {
+    const next = !slideshow
+    setSlideshow(next)
+    if (next) {
+      showNotice('スライドショーを開始しました（S で停止）')
+      const video = videoRef.current
+      if (video && video.paused) void video.play().catch(() => undefined)
+    } else {
+      showNotice('スライドショーを停止しました')
+    }
+  }, [slideshow, showNotice])
+
+  // #8: スライドショー（画像は 3 秒で次へ。動画は onEnded が担当する）
+  useEffect(() => {
+    if (!slideshow || fileKind !== 'image') return
+    const timer = window.setTimeout(() => {
+      if (index + 1 >= files.length) {
+        if (hasMore) onRequestMore()
+        else setSlideshow(false)
+        return
+      }
+      goNext()
+    }, SLIDESHOW_INTERVAL_MS)
+    return () => window.clearTimeout(timer)
+  }, [slideshow, fileKind, index, files.length, hasMore, goNext, onRequestMore])
+
+  /** #8: `⋯` の「フォルダで開く」。 */
+  const revealInFolder = useCallback(() => {
+    setMenuOpen(false)
+    if (!file) return
+    if (bench) {
+      showNotice('ベンチモードではエクスプローラを開けません')
+      return
+    }
+    void api
+      .revealFile(file.id)
+      .then(() => showNotice('エクスプローラでファイルを選択しました'))
+      .catch((cause: unknown) => showNotice(describeError(cause)))
+  }, [bench, file, showNotice])
+
+  /** #8: `⋯` の「パスをコピー」。相対パスはルートの実パスと繋いで渡す。 */
+  const copyPath = useCallback(() => {
+    setMenuOpen(false)
+    if (!absolutePath) {
+      showNotice('パスを取得できませんでした')
+      return
+    }
+    void navigator.clipboard
+      .writeText(absolutePath)
+      .then(() => showNotice('パスをコピーしました'))
+      .catch(() => showNotice('クリップボードにコピーできませんでした'))
+  }, [absolutePath, showNotice])
+
+  /** #8: `⋯` の「ゴミ箱へ」。確認 + Undo は App の既存フロー。 */
+  const requestDelete = useCallback(() => {
+    setMenuOpen(false)
+    if (!file) return
+    if (!onDeleteFile) {
+      showNotice('この画面からは削除できません')
+      return
+    }
+    onDeleteFile(file)
+  }, [file, onDeleteFile, showNotice])
+
+  // `⋯` メニューは外側クリックで閉じる（Esc は下のキー処理が 1 段だけ閉じる）
+  useEffect(() => {
+    if (!menuOpen) return
+    const onPointerDown = (event: PointerEvent) => {
+      if (menuRef.current?.contains(event.target as Node)) return
+      setMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [menuOpen])
+
   // キーボード（capture で作品詳細の Esc = 戻るより先に処理する）
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -371,6 +663,8 @@ export function Lightbox({
       // #5: ショートカット一覧（?）が開いている間は、Esc をヘルプへ渡して
       // ライトボックスは閉じない（1 段ずつ閉じる）。他のキーも下へ流さない。
       if (document.querySelector('[data-shortcuts-dialog]')) return
+      // #8: タグ編集（Radix のダイアログ）が開いている間は、Esc をそちらへ渡す
+      if (document.querySelector('[data-tag-editor]')) return
       // #73: 再実行の確認中は Esc でダイアログだけを閉じる
       if (confirmQueue) {
         if (event.key === 'Escape') {
@@ -378,6 +672,13 @@ export function Lightbox({
           event.stopPropagation()
           setConfirmQueue(false)
         }
+        return
+      }
+      // #8: `⋯` メニューが開いていれば Esc はメニューだけを閉じる
+      if (menuOpen && event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        setMenuOpen(false)
         return
       }
       if (event.key === 'Escape') {
@@ -395,6 +696,46 @@ export function Lightbox({
         Boolean(target?.isContentEditable)
       ) {
         return
+      }
+
+      // #8: ライトボックスからの操作。修飾キー付きの既存操作（Alt+← など）は
+      // ここで奪わない（`matchesShortcut` が Ctrl / Alt / Meta を見る）。
+      if (!event.ctrlKey && !event.altKey && !event.metaKey) {
+        if (matchesShortcut('detail-favorite', event)) {
+          event.preventDefault()
+          toggleFavorite()
+          return
+        }
+        if (matchesShortcut('detail-rate', event)) {
+          event.preventDefault()
+          applyRating(Number(event.key))
+          return
+        }
+        if (matchesShortcut('detail-unrated', event)) {
+          event.preventDefault()
+          applyRating(null)
+          return
+        }
+        if (matchesShortcut('detail-tags', event)) {
+          event.preventDefault()
+          if (workId !== undefined) setTagsOpen(true)
+          return
+        }
+        if (matchesShortcut('detail-meta', event)) {
+          event.preventDefault()
+          setMetaOpen((open) => !open)
+          return
+        }
+        if (matchesShortcut('detail-slideshow', event)) {
+          event.preventDefault()
+          toggleSlideshow()
+          return
+        }
+        if (matchesShortcut('detail-trash', event)) {
+          event.preventDefault()
+          requestDelete()
+          return
+        }
       }
 
       if (fileKind === 'video') {
@@ -440,7 +781,23 @@ export function Lightbox({
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [close, fileKind, goNext, goPrev, seekBy, shielded, toggleFullscreen, togglePlay, confirmQueue])
+  }, [
+    applyRating,
+    close,
+    confirmQueue,
+    fileKind,
+    goNext,
+    goPrev,
+    menuOpen,
+    requestDelete,
+    seekBy,
+    shielded,
+    toggleFavorite,
+    toggleFullscreen,
+    togglePlay,
+    toggleSlideshow,
+    workId,
+  ])
 
   // 画像のホイールズーム（passive: false でページスクロールを止める）
   useEffect(() => {
@@ -495,6 +852,9 @@ export function Lightbox({
   const fallbackImage = file.thumb_path
   const imageUrl = image ? (imageFailed ? fallbackImage : (direct ?? fallbackImage)) : null
   const total = files.length
+  const favorite = mark?.favorite ?? false
+  const rating = mark?.rating ?? null
+  const markReady = mark !== null
 
   return (
     <div
@@ -505,13 +865,17 @@ export function Lightbox({
       data-lightbox
       data-file-id={file.id}
       data-shielded={shielded ? 'true' : undefined}
+      data-slideshow={slideshow ? 'true' : 'false'}
       className={cn(
         'fixed inset-0 z-[80] flex select-none flex-col bg-black/92 text-white backdrop-blur-sm',
         shielded && 'hidden',
       )}
     >
       {/* 上部バー */}
-      <div className="flex h-12 flex-none items-center gap-2 border-b border-white/10 bg-black/40 px-4 py-2">
+      <div
+        data-lightbox-topbar
+        className="flex h-12 flex-none items-center gap-1.5 border-b border-white/10 bg-black/40 px-4 py-2"
+      >
         <Button
           variant="ghost"
           size="icon-sm"
@@ -524,28 +888,84 @@ export function Lightbox({
         </Button>
         <span className="flex min-w-0 items-center gap-2">
           {image ? (
-            <ImageIcon className="size-4 text-[var(--brand)]" aria-hidden="true" />
+            <ImageIcon className="size-4 flex-none text-[var(--brand)]" aria-hidden="true" />
           ) : (
-            <Film className="size-4 text-[var(--brand)]" aria-hidden="true" />
+            <Film className="size-4 flex-none text-[var(--brand)]" aria-hidden="true" />
           )}
           <span className="truncate text-sm font-semibold">{file.name}</span>
         </span>
-        <span className="ml-auto flex flex-none items-center gap-2 text-xs text-white/65 tabular-nums">
-          <span>
-            {index + 1} / {hasMore ? `${total}+` : total}
+        <div className="ml-auto flex min-w-0 flex-none items-center gap-1.5">
+          <span className="hidden flex-none items-center gap-2 text-xs text-white/65 tabular-nums xl:flex">
+            <span>
+              {index + 1} / {hasMore ? `${total}+` : total}
+            </span>
+            <span aria-hidden="true">·</span>
+            <span>{formatBytes(file.bytes)}</span>
+            <span aria-hidden="true">·</span>
+            <span>{formatShortDate(file.mtime)}</span>
           </span>
-          <span aria-hidden="true">·</span>
-          <span>{formatBytes(file.bytes)}</span>
-          <span aria-hidden="true">·</span>
-          <span>{formatShortDate(file.mtime)}</span>
-        </span>
+
+          {/* #8: お気に入り・評価（作品単位） */}
+          {workId !== undefined && (
+            <span
+              className="flex flex-none items-center gap-1 rounded-full border border-white/12 bg-black/30 px-1.5 py-0.5"
+              data-lightbox-marks
+              data-lightbox-favorite={favorite ? 'true' : 'false'}
+              data-lightbox-rating={rating ?? ''}
+            >
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className={cn(
+                'text-white/80 hover:bg-white/10',
+                favorite && 'text-[var(--highlight)]',
+              )}
+              aria-label={favorite ? 'お気に入りから外す（Shift+F）' : 'お気に入りに追加（Shift+F）'}
+              aria-pressed={favorite}
+              title={favorite ? 'お気に入りから外す（Shift+F）' : 'お気に入りに追加（Shift+F）'}
+              disabled={!markReady || markBusy}
+              data-lightbox-favorite-toggle
+              onClick={toggleFavorite}
+            >
+              <Heart className={cn(favorite && 'fill-current')} aria-hidden="true" />
+            </Button>
+            <RatingStars
+              favorite={favorite}
+              rating={rating}
+              onChange={(next) => changeMark({ favorite: next.favorite, rating: next.rating })}
+              disabled={!markReady || markBusy}
+              showFavorite={false}
+              showLabel={false}
+            />
+            <span
+              className="w-7 flex-none text-center text-xs text-white/65 tabular-nums"
+              aria-live="polite"
+            >
+              {rating === null ? '—' : `${rating}/5`}
+            </span>
+          </span>
+        )}
+
         <Button
           variant="ghost"
           size="icon-sm"
-          className="text-white hover:bg-white/10"
-          aria-label="生成情報"
+          className="flex-none text-white hover:bg-white/10"
+          aria-label="タグを編集（T）"
+          title="タグを編集（T）"
+          disabled={workId === undefined}
+          data-lightbox-tags
+          onClick={() => setTagsOpen(true)}
+        >
+          <TagIcon />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="flex-none text-white hover:bg-white/10"
+          aria-label="生成情報（I）"
           aria-pressed={metaOpen}
-          title="生成情報（プロンプト・モデル・シード）"
+          title="生成情報（プロンプト・モデル・シード）（I）"
+          data-lightbox-meta
           onClick={() => setMetaOpen((open) => !open)}
         >
           <Info />
@@ -553,18 +973,108 @@ export function Lightbox({
         <Button
           variant="ghost"
           size="icon-sm"
-          className="text-white hover:bg-white/10"
+          className={cn(
+            'flex-none text-white hover:bg-white/10',
+            slideshow && 'bg-white/15 text-[var(--brand)]',
+          )}
+          aria-label={slideshow ? 'スライドショーを停止（S）' : 'スライドショー（S）'}
+          aria-pressed={slideshow}
+          title={slideshow ? 'スライドショーを停止（S）' : 'スライドショー（S）'}
+          data-lightbox-slideshow
+          onClick={toggleSlideshow}
+        >
+          <MonitorPlay />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="flex-none text-white hover:bg-white/10"
           aria-label={isFullscreen ? '全画面を解除（F）' : '全画面（F）'}
           title={isFullscreen ? '全画面を解除（F）' : '全画面（F）'}
+          data-lightbox-fullscreen
           onClick={toggleFullscreen}
         >
           {isFullscreen ? <Minimize /> : <Maximize />}
         </Button>
+
+        {/* #8: `⋯`（フォルダで開く / パスをコピー / ゴミ箱へ） */}
+        <div ref={menuRef} className="relative flex-none">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="text-white hover:bg-white/10"
+            aria-label="その他の操作"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            title="その他の操作"
+            data-lightbox-menu-trigger
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            <MoreHorizontal />
+          </Button>
+          {menuOpen && (
+            <div
+              role="menu"
+              aria-label="その他の操作"
+              data-lightbox-menu
+              className="absolute top-[calc(100%+8px)] right-0 z-[90] w-60 origin-top-right rounded-[var(--radius-panel)] border border-white/15 bg-[var(--raised)] p-1.5 text-[13px] text-white shadow-[0_12px_32px_rgba(0,0,0,0.55)]"
+            >
+              <MenuItem
+                icon={<FolderOpen className="size-3.5" aria-hidden="true" />}
+                label="フォルダで開く"
+                dataAttr="data-lightbox-reveal"
+                onClick={revealInFolder}
+              />
+              <MenuItem
+                icon={<Copy className="size-3.5" aria-hidden="true" />}
+                label="パスをコピー"
+                title={absolutePath ?? 'パスを取得できません'}
+                disabled={!absolutePath}
+                dataAttr="data-lightbox-copy-path"
+                onClick={copyPath}
+              />
+              <div className="my-1 h-px bg-white/10" role="separator" />
+              <MenuItem
+                icon={<Trash2 className="size-3.5" aria-hidden="true" />}
+                label="ゴミ箱へ"
+                hint="Delete"
+                tone="danger"
+                disabled={!onDeleteFile}
+                dataAttr="data-lightbox-trash"
+                onClick={requestDelete}
+              />
+            </div>
+          )}
+        </div>
+        </div>
       </div>
+
+      {/* #8: 短い通知（音声 / コピー / スライドショー） */}
+      {notice && (
+        <p
+          className="m-0 flex-none border-b border-white/10 bg-black/55 px-4 py-1.5 text-xs text-white/85"
+          role="status"
+          data-lightbox-notice
+        >
+          {notice}
+        </p>
+      )}
+      {audioNotice && (
+        <p
+          className="m-0 flex-none border-b border-white/10 bg-black/55 px-4 py-1.5 text-xs text-[var(--brand)]"
+          role="status"
+          data-lightbox-audio-notice
+        >
+          {audioNotice}
+        </p>
+      )}
 
       {/* #60: 生成情報パネル（プロンプト・モデル・シード等） */}
       {metaOpen && (
-        <div className="max-h-[42vh] flex-none overflow-y-auto border-b border-white/10 bg-black/70 px-4 py-3 text-xs">
+        <div
+          data-meta-panel
+          className="max-h-[42vh] flex-none overflow-y-auto border-b border-white/10 bg-black/70 px-4 py-3 text-xs"
+        >
           {metaLoading ? (
             <p className="m-0 text-white/60">読み込み中…</p>
           ) : !meta ? (
@@ -740,9 +1250,9 @@ export function Lightbox({
               const video = event.currentTarget
               const nextDuration = Number.isFinite(video.duration) ? video.duration : 0
               setDuration(nextDuration)
-              video.volume = volume
-              video.muted = muted
-              video.playbackRate = rate
+              // #10: メタデータ到着時も「いまの状態」（ref）を適用する。
+              // 解除操作より後に届いても、解除を巻き戻さない。
+              applyVideoState()
               snapshot.current = {
                 fileId: file.id,
                 positionMs: Math.round(video.currentTime * 1000),
@@ -757,7 +1267,7 @@ export function Lightbox({
                 pendingSeekMs.current = null
               }
               // クリックで開いたら自動再生（音はミュートのまま）
-              if (!shielded) void video.play().catch(() => undefined)
+              if (!shieldedRef.current) void video.play().catch(() => undefined)
             }}
             onTimeUpdate={(event) => {
               const video = event.currentTarget
@@ -784,6 +1294,14 @@ export function Lightbox({
             onError={() => setVideoError(true)}
             onEnded={() => {
               saveSnapshot()
+              // #8: スライドショー中は動画の再生完了で次へ
+              if (!slideshow) return
+              if (index + 1 >= files.length) {
+                if (hasMore) onRequestMore()
+                else setSlideshow(false)
+                return
+              }
+              goNext()
             }}
           />
         )}
@@ -819,6 +1337,17 @@ export function Lightbox({
         {resumeMs !== null && !videoError && !bench && (
           <span className="absolute top-2 left-1/2 -translate-x-1/2 rounded-full border border-white/15 bg-black/70 px-3 py-1 text-xs text-white/85 tabular-nums backdrop-blur-sm">
             続きから {formatDuration(resumeMs)}
+          </span>
+        )}
+
+        {slideshow && (
+          <span
+            className="absolute top-2 right-2 flex items-center gap-1.5 rounded-full border border-white/15 bg-black/70 px-3 py-1 text-xs text-white/85 backdrop-blur-sm"
+            data-lightbox-slideshow-indicator
+          >
+            <MonitorPlay className="size-3.5" aria-hidden="true" />
+            スライドショー中
+            {fileKind === 'image' ? ` · 3 秒` : ' · 再生完了で次へ'}
           </span>
         )}
 
@@ -922,17 +1451,8 @@ export function Lightbox({
               className="text-white hover:bg-white/10"
               aria-label={muted ? 'ミュート解除' : 'ミュート'}
               title={muted ? 'ミュート解除' : 'ミュート'}
-              onClick={() => {
-                const video = videoRef.current
-                const next = volumeAfterMuteToggle({ volume, muted })
-                setMuted(next.muted)
-                setVolume(next.volume)
-                if (video) {
-                  video.muted = next.muted
-                  video.volume = next.volume
-                }
-                rememberPlayback(next.volume, next.muted)
-              }}
+              data-lightbox-mute
+              onClick={toggleMute}
             >
               {muted || volume === 0 ? <VolumeX /> : <Volume2 />}
             </Button>
@@ -944,17 +1464,7 @@ export function Lightbox({
               value={muted ? 0 : volume}
               aria-label="音量"
               className="h-1.5 w-20 accent-[var(--brand)]"
-              onChange={(event) => {
-                const next = volumeAfterSlider(Number(event.target.value))
-                setVolume(next.volume)
-                setMuted(next.muted)
-                const video = videoRef.current
-                if (video) {
-                  video.volume = next.volume
-                  video.muted = next.muted
-                }
-                rememberPlayback(next.volume, next.muted)
-              }}
+              onChange={(event) => changeVolume(Number(event.target.value))}
             />
             <label className="flex items-center gap-1 text-xs">
               <span className="text-white/65">速度</span>
@@ -965,8 +1475,6 @@ export function Lightbox({
                 onChange={(event) => {
                   const next = Number(event.target.value)
                   setRate(next)
-                  const video = videoRef.current
-                  if (video) video.playbackRate = next
                 }}
               >
                 {SPEEDS.map((speed) => (
@@ -976,11 +1484,40 @@ export function Lightbox({
                 ))}
               </select>
             </label>
-            <span className="ml-auto text-xs text-white/60">
-              Space 再生/停止 · ←→ ±5秒 · Shift+←→ 前後 · Esc 閉じる
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className={cn(
+                'text-white hover:bg-white/10',
+                slideshow && 'bg-white/15 text-[var(--brand)]',
+              )}
+              aria-label={slideshow ? 'スライドショーを停止（S）' : 'スライドショー（S）'}
+              aria-pressed={slideshow}
+              data-lightbox-slideshow-bar
+              onClick={toggleSlideshow}
+            >
+              <MonitorPlay />
+            </Button>
+            <span className="ml-auto hidden text-xs text-white/60 lg:block">
+              Shift+F · 1〜5 · T · I · S
             </span>
           </div>
         </div>
+      )}
+
+      {/* #8: タグ編集（既存の TagEditor をライトボックスの上に出す） */}
+      {workId !== undefined && (
+        <TagEditor
+          open={tagsOpen}
+          onOpenChange={setTagsOpen}
+          workIds={[workId]}
+          overlayClassName="z-[100]"
+          contentClassName="z-[101]"
+          onChanged={() => {
+            notifyTagsChanged()
+            showNotice('タグを更新しました')
+          }}
+        />
       )}
 
       {/* #73: 「この設定で再実行」の確認（ComfyUI のキューに入る） */}
@@ -1019,6 +1556,48 @@ export function Lightbox({
         </div>
       )}
     </div>
+  )
+}
+
+/** #8: `⋯` メニューの 1 行。 */
+function MenuItem({
+  icon,
+  label,
+  hint,
+  title,
+  tone,
+  disabled = false,
+  dataAttr,
+  onClick,
+}: {
+  icon: ReactNode
+  label: string
+  hint?: string
+  title?: string
+  tone?: 'danger'
+  disabled?: boolean
+  dataAttr?: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      disabled={disabled}
+      title={title ?? hint ?? label}
+      {...(dataAttr ? { [dataAttr]: 'true' } : {})}
+      onClick={onClick}
+      className={cn(
+        'flex h-8 w-full items-center gap-2 rounded-[6px] px-2 text-left text-[13px] transition-colors hover:bg-white/10 disabled:pointer-events-none disabled:opacity-45',
+        tone === 'danger' ? 'text-[var(--destructive)]' : 'text-white',
+      )}
+    >
+      <span className={cn('flex-none', tone === 'danger' ? 'text-current' : 'text-white/65')}>
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {hint && <span className="flex-none text-xs text-white/45">{hint}</span>}
+    </button>
   )
 }
 
