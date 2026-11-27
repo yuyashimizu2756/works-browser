@@ -83,6 +83,11 @@ const END_GUARD_MS = 2_000
 const SAVE_INTERVAL_MS = 5_000
 /** #8: スライドショーの送り間隔（画像）。動画は再生完了で次へ。 */
 const SLIDESHOW_INTERVAL_MS = 3_000
+/**
+ * #29: 開いてからこの時間内に `readyState >= 3` にならなければ、中央の再生ボタンを
+ * 出す（`canplay` 待ちで固まらないようにする）。
+ */
+const PLAY_READY_TIMEOUT_MS = 3_000
 /** #8: 解除・コピーなどの短い通知を出しておく時間。 */
 const NOTICE_MS = 3_000
 
@@ -91,11 +96,11 @@ type NoticeTone = 'info' | 'audio' | 'error'
 type LightboxNotice = { id: number; message: string; tone: NoticeTone }
 
 /**
- * #26: 再生要求の待ち状態。
- * - `wait`: まだ `canplay` 前。届いたら最初の `play()`
+ * #26 / #29: 再生要求の待ち状態。
+ * - `none`: 待っていない
  * - `retry`: `play()` が失敗した。次の `canplay` で 1 回だけ再試行
  */
-type PlayRequest = 'none' | 'wait' | 'retry'
+type PlayRequest = 'none' | 'retry'
 
 /** #8: ベンチ / スクショ用のサンプル生成情報（実ファイルが無いため）。 */
 const BENCH_META: GenerationMeta = {
@@ -231,8 +236,16 @@ export function Lightbox({
   const panDrag = useRef<{ x: number; y: number; originX: number; originY: number } | null>(null)
   /** #22: シールド前の再生状態（復帰時に戻す）。 */
   const shieldWasPlaying = useRef(false)
-  /** #26: `canplay` 待ち / 再試行の状態（起動直後の 1 本目対策）。 */
+  /** #26 / #29: `canplay` 待ち / 再試行の状態（起動直後の 1 本目対策）。 */
   const playRequestRef = useRef<PlayRequest>('none')
+  /**
+   * #29: 実際に再生が始まったか（`play` イベント）。3 秒タイマーで
+   * 「準備ができていない」と「再生中に一時的に `readyState` が下がった」を
+   * 区別するために使う。
+   */
+  const playingRef = useRef(false)
+  /** #29: 3 秒タイマー（ファイルを変えたら破棄する）。 */
+  const readyTimeoutRef = useRef<number | null>(null)
   /**
    * #26: まだ自動再生を試していないファイルか。`loadedmetadata` を
    * 取りこぼしても `canplay` で 1 回だけ試せるようにする。ユーザーが
@@ -395,6 +408,7 @@ export function Lightbox({
     setSeekable(true)
     seekableRef.current = true
     playRequestRef.current = 'none'
+    playingRef.current = false
     autoPlayWanted.current = fileKind === 'video' && !bench
     setPlaying(false)
     setRate(1)
@@ -411,6 +425,26 @@ export function Lightbox({
       fileId: fileKind === 'video' ? fileId : null,
       positionMs: 0,
       durationMs: file?.duration_ms ?? null,
+    }
+
+    // #29: 開いてから 3 秒たっても `readyState < 3` なら中央の再生ボタンを出す。
+    // `canplay` が発火しない環境でも操作不能にならない。
+    if (readyTimeoutRef.current !== null) {
+      window.clearTimeout(readyTimeoutRef.current)
+      readyTimeoutRef.current = null
+    }
+    if (fileKind === 'video' && fileId !== null && !bench) {
+      readyTimeoutRef.current = window.setTimeout(() => {
+        readyTimeoutRef.current = null
+        const video = videoRef.current
+        if (!video || video.error || shieldedRef.current) return
+        if (video.readyState >= 3 || playingRef.current) return
+        console.warn(
+          '[lightbox] 3 秒たっても再生の準備ができません（readyState < 3）',
+          file ? mediaFailureInfo(file, video) : null,
+        )
+        setPlayBlocked(true)
+      }, PLAY_READY_TIMEOUT_MS)
     }
 
     if (fileKind !== 'video' || fileId === null || bench) return
@@ -440,11 +474,16 @@ export function Lightbox({
       })
     return () => {
       alive = false
+      // #29: ファイルを変えた / 閉じたあとにタイマーが発火しないようにする
+      if (readyTimeoutRef.current !== null) {
+        window.clearTimeout(readyTimeoutRef.current)
+        readyTimeoutRef.current = null
+      }
     }
   }, [fileKind, fileId, file?.duration_ms, bench])
 
   /**
-   * #26: 再生開始。`play()` の reject を握りつぶさず、1 回目は `canplay` で
+   * #26 / #29: 再生開始。`play()` の reject を握りつぶさず、1 回目は `canplay` で
    * 1 回だけ再試行する。それでも駄目なら中央の再生ボタンを出す。
    */
   const startPlayback = useCallback(
@@ -452,6 +491,7 @@ export function Lightbox({
       const video = videoRef.current
       if (!video) return
       const fail = (cause: unknown) => {
+        autoPlayWanted.current = false
         if (file) {
           // サイズ・コーデック・エラーコード・シーク可否を残す（実機で原因を追えるように）
           console.warn('[lightbox] 再生を開始できませんでした', mediaFailureInfo(file, video, cause))
@@ -484,6 +524,7 @@ export function Lightbox({
       if (!result) return
       void result
         .then(() => {
+          autoPlayWanted.current = false
           playRequestRef.current = 'none'
           setPlayBlocked(false)
         })
@@ -494,17 +535,13 @@ export function Lightbox({
   startPlaybackRef.current = startPlayback
 
   /**
-   * #26: 起動直後の 1 本目対策。`loadedmetadata` では再生せず、デコード可能に
-   * なる `canplay`（readyState >= 3）まで待ってから `play()` する。
-   * すでに再生可能なら待たずに開始する。
+   * #29: 再生を要求する。`loadedmetadata` の初回も、ユーザーの Space / クリックも
+   * ここから即 `play()` を呼ぶ。再生用の `<video>` は `preload="auto"` なので、
+   * `play()` がバッファリングを開始する。`canplay` を待ってから呼ぶと、環境に
+   * よっては `canplay` が発火せずデッドロックする（v0.2.9 の不具合）。
    */
   const requestPlayback = useCallback(() => {
-    const video = videoRef.current
-    if (!video) return
-    if (video.readyState < 3) {
-      playRequestRef.current = 'wait'
-      return
-    }
+    autoPlayWanted.current = false
     playRequestRef.current = 'none'
     startPlayback()
   }, [startPlayback])
@@ -1508,7 +1545,9 @@ export function Lightbox({
             ref={videoRef}
             className="max-h-full max-w-full bg-black"
             src={direct ?? undefined}
-            preload="metadata"
+            // #29: 再生用は先読みする。`preload="metadata"` のままだと `play()` まで
+            // バッファリングが進まず、`canplay` が発火しないことがある。
+            preload="auto"
             playsInline
             onClick={togglePlay}
             onLoadedMetadata={(event) => {
@@ -1533,26 +1572,27 @@ export function Lightbox({
                 }
                 pendingSeekMs.current = null
               }
-              // クリックで開いたら自動再生（音はミュートのまま）。
-              // #26: `canplay`（readyState >= 3）まで待ってから再生する。
-              if (!shieldedRef.current) requestPlayback()
+              // #29: メタデータが来たら（readyState >= 1）すぐ `play()` を呼び、
+              // バッファリングを開始する。`canplay` 待ちにすると初回だけ固まる。
+              if (autoPlayWanted.current && !shieldedRef.current) {
+                requestPlayback()
+              }
             }}
             onCanPlay={() => {
-              // #26: 起動直後の 1 本目は `canplay` を待ってから 1 回目の play()。
-              // 失敗していたら、ここで 1 回だけ再試行する。
+              // #29: `loadedmetadata` の初回 `play()` が失敗していたら、ここで
+              // 1 回だけ再試行する。取りこぼしても、まだ試していなければ開始する。
               const request = playRequestRef.current
-              if (request === 'none') {
-                // loadedmetadata を取りこぼしても、まだ一度も再生していなければ試す
-                if (!autoPlayWanted.current) return
+              if (request === 'retry') {
+                playRequestRef.current = 'none'
                 autoPlayWanted.current = false
                 if (shieldedRef.current) return
-                startPlayback()
+                startPlayback(true)
                 return
               }
-              playRequestRef.current = 'none'
+              if (!autoPlayWanted.current) return
               autoPlayWanted.current = false
               if (shieldedRef.current) return
-              startPlayback(request === 'retry')
+              startPlayback()
             }}
             onProgress={(event) => updateSeekable(event.currentTarget)}
             onTimeUpdate={(event) => {
@@ -1568,15 +1608,33 @@ export function Lightbox({
               if (performance.now() - lastSavedAt.current > SAVE_INTERVAL_MS) saveSnapshot()
             }}
             onPlay={() => {
+              playingRef.current = true
               setPlaying(true)
+              setPlayBlocked(false)
               // #47: 再生が始まったらプレビューは破棄する
               scrub.cancel()
             }}
             onPause={() => {
               // ユーザーの一時停止。`canplay` が後から来ても再開しない。
+              playingRef.current = false
               autoPlayWanted.current = false
               setPlaying(false)
               saveSnapshot()
+            }}
+            // #29: 初回のデッドロック・途中の詰まりを実機で追えるように残す。
+            onWaiting={(event) => {
+              if (!file) return
+              console.warn(
+                '[lightbox] 動画のバッファリング待ち（waiting）',
+                mediaFailureInfo(file, event.currentTarget),
+              )
+            }}
+            onStalled={(event) => {
+              if (!file) return
+              console.warn(
+                '[lightbox] 動画の読み込みが止まりました（stalled）',
+                mediaFailureInfo(file, event.currentTarget),
+              )
             }}
             onSeeked={saveSnapshot}
             onError={(event) => {
@@ -1587,6 +1645,7 @@ export function Lightbox({
               }
               playRequestRef.current = 'none'
               autoPlayWanted.current = false
+              playingRef.current = false
               setPlayBlocked(false)
               setVideoError(true)
             }}

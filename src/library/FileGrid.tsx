@@ -125,8 +125,9 @@ function FileTile({
   const [failed, setFailed] = useState(false)
   /** #24: コピー中の連打を防ぐ（結果はトーストで知らせる）。 */
   const copyBusy = useRef(false)
-  // #52: 全体非表示中でも、このファイルだけ一時的に表示できる
-  const { enabled: globalHidden, revealed, toggle: toggleReveal, reveal } = useRevealedFiles()
+  // #52 / #30: 全体非表示中でも、このファイルだけ一時的に表示できる。
+  // 開くことによる自動表示はしない（一覧へ戻ったときに残らないようにする）。
+  const { enabled: globalHidden, revealed, toggle: toggleReveal } = useRevealedFiles()
   const individuallyRevealed = globalHidden && revealed.has(file.id)
   const thumbVisible = thumbnailVisible || individuallyRevealed
   // 非表示中は convertFileSrc を呼ばない
@@ -142,8 +143,8 @@ function FileTile({
     const now = performance.now()
     if (now - lastOpenRef.current < 500) return
     lastOpenRef.current = now
-    // #52: 全体非表示中に開いたファイルは、その場で表示に切り替える
-    if (globalHidden) reveal(file.id)
+    // #30: 開いたファイルを勝手に一時表示しない。ここで `reveal` すると、
+    // 一覧へ戻ったときにサムネイルが表示されたままになる（手動の目アイコンだけ）。
     onOpen(file)
   }
   const resumeAt = file.kind === 'video' && (file.position_ms ?? 0) > 1_000 ? file.position_ms : null

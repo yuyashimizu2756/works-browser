@@ -14,7 +14,6 @@ export type RevealedFilesValue = {
   /** #121: 作品カードの「この作品のサムネイルを表示」状態。 */
   revealedWorks: ReadonlySet<number>
   toggle: (fileId: number) => void
-  reveal: (fileId: number) => void
   /** #121: 作品単位の個別表示。 */
   toggleWork: (workId: number) => void
 }
@@ -24,7 +23,6 @@ export const RevealedFilesContext = createContext<RevealedFilesValue>({
   revealed: new Set<number>(),
   revealedWorks: new Set<number>(),
   toggle: () => undefined,
-  reveal: () => undefined,
   toggleWork: () => undefined,
 })
 
