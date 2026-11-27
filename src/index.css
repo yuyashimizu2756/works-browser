@@ -259,6 +259,21 @@
 }
 
 /*
+ * #5: 個別サムネ表示ボタン（目アイコン）は hover / focus のときだけ出す。
+ * タッチ環境（`hover: none`）には hover が無いので、常時表示のままにする。
+ *
+ * ここはレイヤー外に置く。Tailwind の `opacity-0` / `pointer-events-none` は
+ * utilities レイヤーなので、メディア条件付きのこのルールが勝つ。
+ */
+@media (hover: none) {
+  [data-work-reveal],
+  [data-file-reveal] {
+    opacity: 1 !important;
+    pointer-events: auto !important;
+  }
+}
+
+/*
  * #98: サムネイル非表示が既定なので、画像なしのカードは「暗い空箱」ではなく
  * タイトルから生成したタイポグラフィック・カバーにする。色相は
  * `--placeholder-hue`（タイトルのハッシュ）、彩度・明度は固定。面であることは

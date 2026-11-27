@@ -368,6 +368,9 @@ export function Lightbox({
     const onKeyDown = (event: KeyboardEvent) => {
       // #22: シールド中は下の画面を動かさない（解除後に元の状態へ戻す）
       if (shielded) return
+      // #5: ショートカット一覧（?）が開いている間は、Esc をヘルプへ渡して
+      // ライトボックスは閉じない（1 段ずつ閉じる）。他のキーも下へ流さない。
+      if (document.querySelector('[data-shortcuts-dialog]')) return
       // #73: 再実行の確認中は Esc でダイアログだけを閉じる
       if (confirmQueue) {
         if (event.key === 'Escape') {
