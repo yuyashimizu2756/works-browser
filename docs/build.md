@@ -85,18 +85,19 @@ npm.cmd run tauri build
 `bundle.targets` は `["nsis", "msi"]`、`bundle.windows.nsis.installMode` は `currentUser`
 （管理者権限不要・ユーザー単位インストール）です。
 
-成果物（v0.2.0 の Release 公開アセットを Windows 11 でビルドした 2026-11-26 の実測。ffmpeg 同梱、
-サイズは 1 MB = 1,048,576 B 換算）:
+成果物（v0.2.4 の Release 公開アセット＝GitHub Actions の windows-latest でビルドした
+2026-11-27 の実測。ffmpeg 同梱、サイズは 1 MB = 1,048,576 B 換算）:
 
 | 種類 | パス | サイズ |
 |---|---|---|
-| portable exe | `src-tauri\target\release\works-browser.exe` | 14.95 MB（15,672,832 B） |
-| NSIS インストーラ | `src-tauri\target\release\bundle\nsis\works-browser_x.y.z_x64-setup.exe` | 32.41 MB（33,985,170 B） |
-| MSI | `src-tauri\target\release\bundle\msi\works-browser_x.y.z_x64_en-US.msi` | 44.26 MB（46,407,680 B） |
+| portable exe | `src-tauri\target\release\works-browser.exe` | 15.20 MB（15,938,048 B） |
+| NSIS インストーラ | `src-tauri\target\release\bundle\nsis\works-browser_x.y.z_x64-setup.exe` | 32.50 MB（34,075,175 B） |
+| MSI | `src-tauri\target\release\bundle\msi\works-browser_x.y.z_x64_en-US.msi` | 44.36 MB（46,510,080 B） |
 
 バンドルには ffmpeg（展開後 105 MB、zip 圧縮で約 29 MB）が同梱されます。同梱しなければ
-インストーラは portable exe と同程度の数 MB になります。portable exe は 14.95 MB で、
-目標の 15 MB 以下に収まっています（スキャフォールド時点では 8.6 MB）。
+インストーラは portable exe と同程度の数 MB になります。portable exe はこの PC での
+ローカルビルド（v0.2.4）が 14.91 MB（15,633,408 B）で目標の 15 MB 以下、CI の公開アセットは
+バンドル情報のパッチ分だけ大きく 15.20 MB です（スキャフォールド時点では 8.6 MB）。
 
 ### サイズ削減（#86）
 
@@ -105,7 +106,7 @@ npm.cmd run tauri build
 （`unwind`）のままです。
 
 変更前は v0.1.5、変更後は v0.1.6 の当時の Release 公開アセットの実測です（この 2 版は現在
-非公開で、公開中のリリースは v0.2.0 のみ。数値は #86 時点の記録として残しています）。
+非公開で、公開中のリリースは v0.2.4 のみ。数値は #86 時点の記録として残しています）。
 
 | 成果物 | 変更前（v0.1.5） | 変更後（v0.1.6） |
 |---|---:|---:|
