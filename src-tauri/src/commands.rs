@@ -623,6 +623,27 @@ pub fn reveal_file(state: State<'_, AppState>, file_id: i64) -> Result<(), Strin
     reveal::select(&path)
 }
 
+/// ファイルのフルパスを返す（#24）。UI はこの文字列をコピーするだけで、パスを組み立てない。
+#[tauri::command]
+pub fn file_path(state: State<'_, AppState>, file_id: i64) -> Result<String, String> {
+    let conn = open(&state)?;
+    db::file_absolute_path_text(&conn, file_id)
+        .map_err(|error| error_message(&error))?
+        .ok_or_else(|| format!("ファイル {file_id} が見つかりません"))
+}
+
+/// 既定のアプリ（外部プレイヤー）でファイルを開く（#26）。
+///
+/// 解決は [`file_path`] と同じ。`explorer <file>` は関連付けられたアプリへ渡す。
+#[tauri::command]
+pub fn open_file(state: State<'_, AppState>, file_id: i64) -> Result<(), String> {
+    let conn = open(&state)?;
+    let path = db::file_absolute_path(&conn, file_id)
+        .map_err(|error| error_message(&error))?
+        .ok_or_else(|| format!("ファイル {file_id} が見つかりません"))?;
+    reveal::open(&path)
+}
+
 /// エクスプローラで作品フォルダを開く（#5）。
 #[tauri::command]
 pub fn reveal_work(state: State<'_, AppState>, work_id: i64) -> Result<(), String> {

@@ -8,6 +8,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Tag, WorkMark } from '../src/api'
+import { api } from '../src/api'
 import { Lightbox } from '../src/library/Lightbox'
 import { emptyMark, setTagData } from '../src/library/tagData'
 import type { TagData } from '../src/library/tagData'
@@ -180,18 +181,34 @@ describe('#8 上部バーとキーボード', () => {
     expect(props.onIndexChange).toHaveBeenCalledWith(1)
   })
 
-  it('⋯ メニューからパスをコピーし、ゴミ箱へは既存フローへ渡す', async () => {
+  it('⋯ メニューとファイル名横からパスをコピーし、ゴミ箱へは既存フローへ渡す', async () => {
     const onDeleteFile = vi.fn()
     const file = makeFile({ id: 11, rel_path: 'work-1/001.png' })
+    // #24: UI はパスを組み立てず、Rust の file_path の戻り値をコピーする
+    const filePath = vi
+      .spyOn(api, 'filePath')
+      .mockResolvedValue('D:\\Works\\root-1\\work-1\\001.png')
     renderLightbox({ files: [file], onDeleteFile })
 
     fireEvent.click(screen.getByLabelText('その他の操作'))
     await waitFor(() => expect(document.querySelector('[data-lightbox-menu]')).not.toBeNull())
 
     fireEvent.click(document.querySelector('[data-lightbox-copy-path]') as HTMLElement)
+    await waitFor(() => expect(filePath).toHaveBeenCalledWith(11))
     await waitFor(() =>
-      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('D:\\Works\\root-1\\work-1\\001.png'),
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+        'D:\\Works\\root-1\\work-1\\001.png',
+      ),
     )
+    await waitFor(() =>
+      expect(document.querySelector('[data-lightbox-notice]')?.textContent).toContain(
+        'パスをコピーしました',
+      ),
+    )
+
+    // #24: ファイル名の横のコピーアイコンからも同じコマンドを使う
+    fireEvent.click(document.querySelector('[data-lightbox-copy-path-icon]') as HTMLElement)
+    await waitFor(() => expect(filePath).toHaveBeenCalledTimes(2))
 
     fireEvent.click(screen.getByLabelText('その他の操作'))
     fireEvent.click(document.querySelector('[data-lightbox-trash]') as HTMLElement)

@@ -193,6 +193,9 @@ describe('Lightbox のスクラブプレビュー', () => {
     expect(previewVideo.muted).toBe(true)
     expect(previewVideo.preload).toBe('metadata')
     expect(previewVideo).toHaveClass('hidden')
+    // #25: canvas を taint させない（`wbm` は ACAO: * を返す）
+    expect(previewVideo.crossOrigin).toBe('anonymous')
+    expect(previewVideo.getAttribute('crossorigin')).toBe('anonymous')
     // 本体の動画とは別要素であること
     expect(previewVideo).not.toBe(container.querySelector('video:not([data-scrub-preview-video])'))
   })

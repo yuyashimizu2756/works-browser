@@ -30,7 +30,8 @@ import type { FileSummary, WorkMark } from '../api'
 import type { GenerationMeta } from '../api'
 import { reinitializeAudioOutput } from '../lib/audioOutput'
 import { formatBytes, formatDuration, formatShortDate, describeError } from '../lib/format'
-import { fileAbsolutePath } from '../lib/path'
+import { hasSeekableRange, mediaFailureInfo } from '../lib/mediaFailure'
+import { copyFilePath } from '../lib/pathCopy'
 import { slideshowAction } from '../lib/lightbox'
 import { matchesShortcut } from '../lib/shortcuts'
 import { volumeAfterMuteToggle, volumeAfterSlider } from '../lib/volume'
@@ -63,7 +64,10 @@ type Props = {
   shielded?: boolean
   /** #8: お気に入り・評価・タグは作品単位。未指定ならその操作を出さない。 */
   workId?: number
-  /** #8: ルートの実パス（「パスをコピー」用。ベンチでは null）。 */
+  /**
+   * #8: ルートの実パス（旧「パスをコピー」用）。#24 以降は Rust の
+   * `file_path` で解決するため UI では使わない（互換のため受け取るだけ）。
+   */
   rootRealPath?: string | null
   /** #8: 「ゴミ箱へ」。確認と Undo は App の既存フローに任せる。 */
   onDeleteFile?: (file: FileSummary) => void
@@ -138,7 +142,6 @@ export function Lightbox({
   bench,
   shielded = false,
   workId,
-  rootRealPath,
   onDeleteFile,
 }: Props) {
   const file: FileSummary | undefined = files[index]
@@ -155,6 +158,10 @@ export function Lightbox({
   const [imageFailed, setImageFailed] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [videoError, setVideoError] = useState(false)
+  /** #26: 自動再生の再試行も失敗したので、中央に再生ボタンを出す。 */
+  const [playBlocked, setPlayBlocked] = useState(false)
+  /** #26: `video.seekable.length === 0`（Range 非対応など）ならシーク不可。 */
+  const [seekable, setSeekable] = useState(true)
   const [playing, setPlaying] = useState(false)
   const [duration, setDuration] = useState(0)
   const [current, setCurrent] = useState(0)
@@ -217,6 +224,12 @@ export function Lightbox({
   const panDrag = useRef<{ x: number; y: number; originX: number; originY: number } | null>(null)
   /** #22: シールド前の再生状態（復帰時に戻す）。 */
   const shieldWasPlaying = useRef(false)
+  /** #26: `canplay` での再試行を 1 回だけ行うためのフラグ。 */
+  const playRetryPending = useRef(false)
+  /** #26: キーボードのシークでも判定するための現在値。 */
+  const seekableRef = useRef(true)
+  /** #26: startPlayback を timeout / イベントから呼ぶための参照。 */
+  const startPlaybackRef = useRef<(isRetry: boolean) => void>(() => {})
 
   // #13: マークの読み込み世代 / 書き込み世代。書き込み開始後に届いた GET は捨てる。
   const markLoadSeq = useRef(0)
@@ -229,14 +242,11 @@ export function Lightbox({
   const fileKind = file?.kind
   const fileId = file?.id ?? null
   const direct = file ? mediaSrc(file.id) : null
-  const absolutePath = useMemo(
-    () => (file ? fileAbsolutePath(rootRealPath, file.rel_path) : null),
-    [file, rootRealPath],
-  )
 
   // #47: プレビュー専用の `<video>`（本体とは別要素・ミュート固定）。
-  // ベンチ / シールド / 再生エラー中は出さない。ファイルが変われば破棄される。
-  const scrubEnabled = fileKind === 'video' && !bench && !shielded && !videoError
+  // ベンチ / シールド / 再生エラー中 / シーク不可のファイルでは出さない。
+  const scrubEnabled =
+    fileKind === 'video' && !bench && !shielded && !videoError && seekable
   const scrub = useScrubPreview({ enabled: scrubEnabled, duration, fileKey: fileId })
 
   /**
@@ -368,6 +378,10 @@ export function Lightbox({
     setPan({ x: 0, y: 0 })
     setImageFailed(false)
     setVideoError(false)
+    setPlayBlocked(false)
+    setSeekable(true)
+    seekableRef.current = true
+    playRetryPending.current = false
     setPlaying(false)
     setRate(1)
     setCurrent(0)
@@ -415,6 +429,63 @@ export function Lightbox({
     }
   }, [fileKind, fileId, file?.duration_ms, bench])
 
+  /**
+   * #26: 再生開始。`play()` の reject を握りつぶさず、1 回目は `canplay` で
+   * 1 回だけ再試行する。それでも駄目なら中央の再生ボタンを出す。
+   */
+  const startPlayback = useCallback(
+    (isRetry = false) => {
+      const video = videoRef.current
+      if (!video) return
+      const fail = (cause: unknown) => {
+        if (file) {
+          // サイズ・コーデック・エラーコードを残す（実機で原因を追えるように）
+          console.warn('[lightbox] 再生を開始できませんでした', mediaFailureInfo(file, video, cause))
+        } else {
+          console.warn('[lightbox] 再生を開始できませんでした', { cause: String(cause) })
+        }
+        if (isRetry) {
+          playRetryPending.current = false
+          setPlayBlocked(true)
+          return
+        }
+        playRetryPending.current = true
+        // `canplay` がすでに過ぎている（readyState >= HAVE_FUTURE_DATA）なら
+        // イベントを待たず、次のタスクで 1 回だけ再試行する。
+        if (video.readyState >= 3) {
+          window.setTimeout(() => {
+            if (!playRetryPending.current) return
+            playRetryPending.current = false
+            startPlaybackRef.current(true)
+          }, 0)
+        }
+      }
+      let result: Promise<void> | undefined
+      try {
+        result = video.play()
+      } catch (cause) {
+        fail(cause)
+        return
+      }
+      if (!result) return
+      void result
+        .then(() => {
+          playRetryPending.current = false
+          setPlayBlocked(false)
+        })
+        .catch(fail)
+    },
+    [file],
+  )
+  startPlaybackRef.current = startPlayback
+
+  /** #26: `video.seekable` からシーク可否を更新する（メタデータ / 進捗時）。 */
+  const updateSeekable = useCallback((video: HTMLVideoElement) => {
+    const next = hasSeekableRange(video)
+    seekableRef.current = next
+    setSeekable(next)
+  }, [])
+
   // #22: シールド中は音を止め、解除時に再生状態（位置・ミュート）へ戻す。
   // `<video>` は DOM に残すので currentTime はそのまま。`silenceVideos` が
   // 付けた dataset から「シールド前に再生中だったか」を読む。
@@ -428,10 +499,10 @@ export function Lightbox({
       return
     }
     if (shieldWasPlaying.current) {
-      void video.play().catch(() => undefined)
+      startPlayback()
       shieldWasPlaying.current = false
     }
-  }, [shielded, applyVideoState])
+  }, [shielded, applyVideoState, startPlayback])
 
   // #60: パネルを開いたときにだけ生成情報を抽出する（走査時には読まない）
   useEffect(() => {
@@ -547,13 +618,13 @@ export function Lightbox({
   const togglePlay = useCallback(() => {
     const video = videoRef.current
     if (!video || bench) return
-    if (video.paused) void video.play().catch(() => setVideoError(true))
+    if (video.paused) startPlayback()
     else video.pause()
-  }, [bench])
+  }, [bench, startPlayback])
 
   const seekBy = useCallback((seconds: number) => {
     const video = videoRef.current
-    if (!video) return
+    if (!video || !seekableRef.current) return
     const max = Number.isFinite(video.duration) ? video.duration : 0
     video.currentTime = clamp(video.currentTime + seconds, 0, Math.max(0, max))
   }, [])
@@ -678,11 +749,11 @@ export function Lightbox({
     if (next) {
       showNotice('スライドショーを開始しました（S で停止）')
       const video = videoRef.current
-      if (video && video.paused) void video.play().catch(() => undefined)
+      if (video && video.paused) startPlayback()
     } else {
       showNotice('スライドショーを停止しました')
     }
-  }, [slideshow, showNotice])
+  }, [slideshow, showNotice, startPlayback])
 
   /**
    * #16: スライドショーの 1 ステップ。画像の 3 秒送りと動画の再生完了で同じ判定を使う。
@@ -721,18 +792,39 @@ export function Lightbox({
       .catch((cause: unknown) => showNotice(describeError(cause)))
   }, [bench, file, showNotice])
 
-  /** #8: `⋯` の「パスをコピー」。相対パスはルートの実パスと繋いで渡す。 */
+  /**
+   * #24: `⋯` の「パスをコピー」とファイル名横のアイコン。パスは Rust の
+   * `file_path` で解決し、UI では組み立てない。
+   */
   const copyPath = useCallback(() => {
     setMenuOpen(false)
-    if (!absolutePath) {
-      showNotice('パスを取得できませんでした')
+    if (!file) return
+    if (bench) {
+      pushNotice('ベンチモードではパスをコピーできません', 'error')
       return
     }
-    void navigator.clipboard
-      .writeText(absolutePath)
-      .then(() => showNotice('パスをコピーしました'))
-      .catch(() => showNotice('クリップボードにコピーできませんでした'))
-  }, [absolutePath, showNotice])
+    void copyFilePath(file.id).then((result) => {
+      pushNotice(
+        result.ok ? 'パスをコピーしました' : result.message,
+        result.ok ? 'info' : 'error',
+      )
+    })
+  }, [bench, file, pushNotice])
+
+  /** #26: 再生できない形式を、OS の関連付け（外部プレイヤー）で開く。 */
+  const openExternal = useCallback(() => {
+    if (!file) return
+    if (bench) {
+      pushNotice('ベンチモードでは外部プレイヤーを開けません', 'error')
+      return
+    }
+    void api
+      .openFile(file.id)
+      .then(() => showNotice('外部プレイヤーで開きました'))
+      .catch((cause: unknown) =>
+        pushNotice(`外部プレイヤーで開けませんでした: ${describeError(cause)}`, 'error'),
+      )
+  }, [bench, file, pushNotice, showNotice])
 
   /** #8: `⋯` の「ゴミ箱へ」。確認 + Undo は App の既存フロー。 */
   const requestDelete = useCallback(() => {
@@ -1009,6 +1101,19 @@ export function Lightbox({
             <Film className="size-4 flex-none text-[var(--brand)]" aria-hidden="true" />
           )}
           <span className="truncate text-sm font-semibold">{file.name}</span>
+          {/* #24: ファイル名の横からフルパスをコピー（`⋯` の項目も残す） */}
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            className="text-white/70 hover:bg-white/10 hover:text-white"
+            aria-label="パスをコピー"
+            title="ファイルのフルパスをコピー"
+            data-lightbox-copy-path-icon
+            disabled={bench}
+            onClick={copyPath}
+          >
+            <Copy />
+          </Button>
         </span>
         <div className="ml-auto flex min-w-0 flex-none items-center gap-1.5">
           {/* #15: 位置（N / 全体）は幅 800 でも常に見える。サイズ・日付は広い画面だけ。 */}
@@ -1154,8 +1259,8 @@ export function Lightbox({
               <MenuItem
                 icon={<Copy className="size-3.5" aria-hidden="true" />}
                 label="パスをコピー"
-                title={absolutePath ?? 'パスを取得できません'}
-                disabled={!absolutePath}
+                title="ファイルのフルパスをコピー"
+                disabled={bench}
                 dataAttr="data-lightbox-copy-path"
                 onClick={copyPath}
               />
@@ -1379,6 +1484,8 @@ export function Lightbox({
               const video = event.currentTarget
               const nextDuration = Number.isFinite(video.duration) ? video.duration : 0
               setDuration(nextDuration)
+              // #26: メタデータ到着時にシーク可否を判定する
+              updateSeekable(video)
               // #10: メタデータ到着時も「いまの状態」（ref）を適用する。
               // 解除操作より後に届いても、解除を巻き戻さない。
               applyVideoState()
@@ -1395,9 +1502,17 @@ export function Lightbox({
                 }
                 pendingSeekMs.current = null
               }
-              // クリックで開いたら自動再生（音はミュートのまま）
-              if (!shieldedRef.current) void video.play().catch(() => undefined)
+              // クリックで開いたら自動再生（音はミュートのまま）。
+              // #26: reject は startPlayback が canplay で 1 回だけ再試行する。
+              if (!shieldedRef.current) startPlayback()
             }}
+            onCanPlay={() => {
+              // #26: play() が reject したときの 1 回だけの再試行
+              if (!playRetryPending.current) return
+              playRetryPending.current = false
+              startPlayback(true)
+            }}
+            onProgress={(event) => updateSeekable(event.currentTarget)}
             onTimeUpdate={(event) => {
               const video = event.currentTarget
               setCurrent(video.currentTime)
@@ -1420,7 +1535,16 @@ export function Lightbox({
               saveSnapshot()
             }}
             onSeeked={saveSnapshot}
-            onError={() => setVideoError(true)}
+            onError={(event) => {
+              const video = event.currentTarget
+              // #26: 形式非対応など。サイズ・コーデック・エラーコードを残す。
+              if (file) {
+                console.warn('[lightbox] 動画を読み込めませんでした', mediaFailureInfo(file, video))
+              }
+              playRetryPending.current = false
+              setPlayBlocked(false)
+              setVideoError(true)
+            }}
             onEnded={() => {
               saveSnapshot()
               // #8 / #16: スライドショー中は動画の再生完了で次へ（終端なら停止）
@@ -1475,14 +1599,50 @@ export function Lightbox({
           </span>
         )}
 
-        {videoError && !bench && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/75 px-6 text-center">
-            <Film className="size-10 text-white/40" aria-hidden="true" />
-            <p className="m-0 text-sm font-semibold">この動画を再生できません</p>
+        {/* #26: 自動再生の再試行も失敗した → 中央の再生ボタン */}
+        {playBlocked && !videoError && !bench && (
+          <div
+            data-lightbox-play-retry
+            className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/55 px-6 text-center"
+          >
+            <p className="m-0 text-sm font-semibold">自動再生できませんでした</p>
             <p className="m-0 max-w-[420px] text-xs text-white/60">
-              mp4（H.264 / AAC）または webm に変換すると再生できます。ファイル自体は
-              「エクスプローラで開く」から確認できます。
+              再生ボタンを押すと開始します。音はミュートのままです。
             </p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-1 text-white"
+              data-lightbox-play-retry-button
+              onClick={() => startPlayback(true)}
+            >
+              <Play data-icon="inline-start" />
+              再生
+            </Button>
+          </div>
+        )}
+
+        {videoError && !bench && (
+          <div
+            data-lightbox-video-error
+            className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/75 px-6 text-center"
+          >
+            <Film className="size-10 text-white/40" aria-hidden="true" />
+            <p className="m-0 text-sm font-semibold">この形式は再生できません</p>
+            <p className="m-0 max-w-[440px] text-xs text-white/60">
+              mp4（H.264 / AAC）または webm に変換すると再生できます。外部プレイヤーで
+              開くこともできます。
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-1 text-white"
+              data-lightbox-open-external
+              onClick={openExternal}
+            >
+              <FolderOpen data-icon="inline-start" />
+              外部プレイヤーで開く
+            </Button>
           </div>
         )}
       </div>
@@ -1499,6 +1659,7 @@ export function Lightbox({
           preload="metadata"
           muted
           playsInline
+          crossOrigin="anonymous"
           onSeeked={scrub.handleSeeked}
           onError={scrub.handleError}
         />
@@ -1574,11 +1735,13 @@ export function Lightbox({
               value={clamp(current, 0, Math.max(duration, 0.1))}
               aria-label="再生位置"
               className="h-1.5 min-w-0 flex-1 cursor-pointer accent-[var(--brand)]"
-              disabled={bench || videoError}
+              disabled={bench || videoError || !seekable}
+              title={!seekable ? 'この動画はシークできません' : undefined}
               onPointerMove={scrub.handlePointerMove}
               onPointerLeave={scrub.handlePointerLeave}
               onPointerCancel={scrub.handlePointerLeave}
               onChange={(event) => {
+                if (!seekableRef.current) return
                 const video = videoRef.current
                 const value = Number(event.target.value)
                 setCurrent(value)
@@ -1647,6 +1810,15 @@ export function Lightbox({
               Space 再生 / ←→ ±5秒 / Shift+←→ 前後 / Esc 閉じる
             </span>
           </div>
+          {!seekable && !videoError && (
+            <p
+              data-lightbox-seek-disabled
+              className="m-0 text-xs text-[var(--highlight)]"
+              role="status"
+            >
+              この動画はシークできません（配信元が Range に対応していないか、インデックス未取得です）
+            </p>
+          )}
         </div>
       )}
 

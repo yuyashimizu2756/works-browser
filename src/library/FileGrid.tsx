@@ -2,9 +2,11 @@
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Eye, EyeOff, Film, ImageIcon, Play } from 'lucide-react'
+import { Eye, EyeOff, Film, ImageIcon, Copy, Play } from 'lucide-react'
 import { cn } from 'cn'
+import { ToastMessage, pushToast } from '@/components/ToastStack'
 import { rowsPerScreen, wantsNextPage } from '../lib/prefetch'
+import { copyFilePath } from '../lib/pathCopy'
 import { useDelayedVisible } from '../lib/useDelayedVisible'
 import { Checkbox } from '@/components/ui/checkbox'
 import type { FileSummary } from '../api'
@@ -121,6 +123,8 @@ function FileTile({
   onOpen: (file: FileSummary) => void
 }) {
   const [failed, setFailed] = useState(false)
+  /** #24: コピー中の連打を防ぐ（結果はトーストで知らせる）。 */
+  const copyBusy = useRef(false)
   // #52: 全体非表示中でも、このファイルだけ一時的に表示できる
   const { enabled: globalHidden, revealed, toggle: toggleReveal, reveal } = useRevealedFiles()
   const individuallyRevealed = globalHidden && revealed.has(file.id)
@@ -143,6 +147,28 @@ function FileTile({
     onOpen(file)
   }
   const resumeAt = file.kind === 'video' && (file.position_ms ?? 0) > 1_000 ? file.position_ms : null
+  /**
+   * #24: カードのコピーアイコン。パスは Rust の `file_path` で解決し、
+   * UI では組み立てない。結果は既存のトーストへ出す。
+   */
+  const copyPath = async () => {
+    if (copyBusy.current) return
+    copyBusy.current = true
+    try {
+      const result = await copyFilePath(file.id)
+      pushToast({
+        key: 'file-path-copy',
+        content: (
+          <ToastMessage
+            message={result.ok ? 'パスをコピーしました' : result.message}
+          />
+        ),
+        duration: 2800,
+      })
+    } finally {
+      copyBusy.current = false
+    }
+  }
   /** メタ 2 行目: 作品詳細では種類 / 寸法 / 長さ、ファイルモードではルート名（#98）。 */
   const secondMeta = showWorkTitle
     ? rootLabel
@@ -265,6 +291,32 @@ function FileTile({
             )}
           </button>
         )}
+
+        {/* #24: ホバーでフルパスをコピー（目アイコンの隣。非表示中はさらに左） */}
+        <button
+          type="button"
+          data-file-copy
+          aria-label={`${file.name} のパスをコピー`}
+          title="パスをコピー"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation()
+            void copyPath()
+          }}
+          onDoubleClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            // Enter / Space はコピーだけに使い、カードを開かない
+            if (event.key === 'Enter' || event.key === ' ') event.stopPropagation()
+          }}
+          className={cn(
+            'absolute top-1.5 z-10 flex size-6 items-center justify-center rounded-md border border-white/15 bg-black/60 text-white/75 backdrop-blur-sm transition-[opacity,background-color,border-color,color] hover:bg-black/80',
+            // 右から 6px（チェック）+ 24 + 8 = 38px。目アイコンがある間はさらに 32px 左。
+            globalHidden ? 'right-[70px]' : 'right-[38px]',
+            'pointer-events-none opacity-0 group-hover/file:pointer-events-auto group-hover/file:opacity-100 group-focus-within/file:pointer-events-auto group-focus-within/file:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100',
+          )}
+        >
+          <Copy className="size-3.5" aria-hidden="true" />
+        </button>
 
         {/* 左上に所属作品名を小さく出す（Issue #21）。作品詳細では出さない */}
         {showWorkTitle && (
