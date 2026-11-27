@@ -1035,9 +1035,10 @@ export function SettingsDialog({ defaultOpen, open: controlledOpen, onOpenChange
               </Button>
             </div>
             <p className="m-0 text-xs leading-relaxed text-muted-foreground">
-              更新は <code className="rounded bg-muted px-1">{RELEASES_URL}</code>{' '}
-              から新しい NSIS インストーラを取得して実行すると、そのまま上書きされます。
-              設定・索引・タグは保持されます（portable exe は手動で置き換え）。
+              更新は <strong className="text-foreground">setup の上書きで OK</strong>{' '}
+              （アンインストール不要）。<code className="rounded bg-muted px-1">{RELEASES_URL}</code>{' '}
+              から新しい NSIS インストーラを取得して実行すれば、そのまま上書きされ、設定・索引・タグは
+              保持されます。ポータブル版は同じ場所の exe を置き換えてください。
             </p>
           </section>
 

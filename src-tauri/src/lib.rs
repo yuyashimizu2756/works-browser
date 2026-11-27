@@ -8,6 +8,7 @@ pub mod index;
 pub mod media;
 pub mod meta;
 mod move_work;
+pub mod playback_log;
 pub mod roots;
 pub mod settings;
 pub mod shield;
@@ -96,6 +97,8 @@ pub fn run() {
             commands::save_file_position,
             commands::get_file_position,
             commands::clear_file_position,
+            // #32: 再生診断の追記（`%APPDATA%\works-browser\playback.log`）
+            commands::playback_log,
             commands::reveal_file,
             commands::reveal_work,
             commands::file_path,

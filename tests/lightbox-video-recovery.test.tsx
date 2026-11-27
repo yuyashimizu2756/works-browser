@@ -20,6 +20,7 @@ vi.mock('../src/api', () => ({
     saveFilePosition: vi.fn(async () => undefined),
     openFile: vi.fn(async () => undefined),
     filePath: vi.fn(async () => 'D:\\Works\\root-1\\work-1\\clip.mp4'),
+    playbackLog: vi.fn(async () => undefined),
   },
 }))
 

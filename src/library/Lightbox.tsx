@@ -32,6 +32,13 @@ import { reinitializeAudioOutput } from '../lib/audioOutput'
 import { formatBytes, formatDuration, formatShortDate, describeError } from '../lib/format'
 import { hasSeekableRange, mediaFailureInfo } from '../lib/mediaFailure'
 import { copyFilePath } from '../lib/pathCopy'
+import {
+  createPlaybackDiagnostic,
+  formatPlaybackDiagnosticText,
+  logPlaybackDiagnostic,
+  scheduleAfterTwoFrames,
+} from '../lib/playbackDiagnostics'
+import type { PlaybackDiagnostic, PlaybackDiagnosticEvent } from '../lib/playbackDiagnostics'
 import { slideshowAction } from '../lib/lightbox'
 import { matchesShortcut } from '../lib/shortcuts'
 import { volumeAfterMuteToggle, volumeAfterSlider } from '../lib/volume'
@@ -172,6 +179,11 @@ export function Lightbox({
   const [videoError, setVideoError] = useState(false)
   /** #26: 自動再生の再試行も失敗したので、中央に再生ボタンを出す。 */
   const [playBlocked, setPlayBlocked] = useState(false)
+  /**
+   * #32: 直近の再生失敗の診断（動画領域の小さなバナーに出す）。
+   * `play()` の reject 名 / message と、その時点の `readyState` などを残す。
+   */
+  const [playDiagnostic, setPlayDiagnostic] = useState<PlaybackDiagnostic | null>(null)
   /** #26: `video.seekable.length === 0`（Range 非対応など）ならシーク不可。 */
   const [seekable, setSeekable] = useState(true)
   const [playing, setPlaying] = useState(false)
@@ -238,6 +250,16 @@ export function Lightbox({
   const shieldWasPlaying = useRef(false)
   /** #26 / #29: `canplay` 待ち / 再試行の状態（起動直後の 1 本目対策）。 */
   const playRequestRef = useRef<PlayRequest>('none')
+  /** #32: 中央の再生ボタンを出しているか（focus / pointerdown の再試行判定用）。 */
+  const playBlockedRef = useRef(false)
+  /**
+   * #32: 2 フレーム後の再試行をキャンセルする。ファイルを変えた / 閉じたら
+   * 前のファイルの動画へ `play()` しない。
+   */
+  const cancelPlaybackRetryRef = useRef<(() => void) | null>(null)
+  /** #32: 再試行の世代。ファイル切り替え後に古いコールバックを無効にする。 */
+  const playbackGenerationRef = useRef(0)
+  playBlockedRef.current = playBlocked
   /**
    * #29: 実際に再生が始まったか（`play` イベント）。3 秒タイマーで
    * 「準備ができていない」と「再生中に一時的に `readyState` が下がった」を
@@ -400,6 +422,12 @@ export function Lightbox({
 
   // ファイルが変わったらズーム・再生状態をリセットし、保存済みの位置を読む
   useEffect(() => {
+    // #32: 前のファイル向けの再試行を破棄する（別の動画を play しない）
+    playbackGenerationRef.current += 1
+    cancelPlaybackRetryRef.current?.()
+    cancelPlaybackRetryRef.current = null
+    playBlockedRef.current = false
+    setPlayDiagnostic(null)
     setZoom(1)
     setPan({ x: 0, y: 0 })
     setImageFailed(false)
@@ -443,6 +471,16 @@ export function Lightbox({
           '[lightbox] 3 秒たっても再生の準備ができません（readyState < 3）',
           file ? mediaFailureInfo(file, video) : null,
         )
+        // #32: タイマーでも同じ値をバナーとログに残す（reject 名は無い）
+        if (file) {
+          const diagnostic = createPlaybackDiagnostic({
+            event: 'ready-timeout',
+            file,
+            video,
+          })
+          setPlayDiagnostic(diagnostic)
+          void logPlaybackDiagnostic(diagnostic)
+        }
         setPlayBlocked(true)
       }, PLAY_READY_TIMEOUT_MS)
     }
@@ -479,8 +517,29 @@ export function Lightbox({
         window.clearTimeout(readyTimeoutRef.current)
         readyTimeoutRef.current = null
       }
+      // #32: 2 フレーム後の再試行も破棄する
+      cancelPlaybackRetryRef.current?.()
+      cancelPlaybackRetryRef.current = null
     }
   }, [fileKind, fileId, file?.duration_ms, bench])
+
+  /**
+   * #32: 再生失敗の診断を作り、バナー表示と `playback.log` への追記を行う。
+   * ログの書き込み失敗は握りつぶす（閲覧を止めない）。
+   */
+  const recordPlaybackFailure = useCallback(
+    (
+      event: PlaybackDiagnosticEvent,
+      video: HTMLVideoElement,
+      cause?: unknown,
+    ): PlaybackDiagnostic => {
+      const diagnostic = createPlaybackDiagnostic({ event, file: file ?? null, video, cause })
+      setPlayDiagnostic(diagnostic)
+      void logPlaybackDiagnostic(diagnostic)
+      return diagnostic
+    },
+    [file],
+  )
 
   /**
    * #26 / #29: 再生開始。`play()` の reject を握りつぶさず、1 回目は `canplay` で
@@ -490,8 +549,24 @@ export function Lightbox({
     (isRetry = false) => {
       const video = videoRef.current
       if (!video) return
+
+      /** #32: 2 フレーム後の再試行を 1 本だけ予約する。 */
+      const scheduleRetry = () => {
+        cancelPlaybackRetryRef.current?.()
+        const generation = playbackGenerationRef.current
+        cancelPlaybackRetryRef.current = scheduleAfterTwoFrames(() => {
+          cancelPlaybackRetryRef.current = null
+          if (generation !== playbackGenerationRef.current) return
+          if (playRequestRef.current !== 'retry') return
+          playRequestRef.current = 'none'
+          startPlaybackRef.current(true)
+        })
+      }
+
       const fail = (cause: unknown) => {
         autoPlayWanted.current = false
+        // #32: 画面のバナーと playback.log に、reject 名 / message と現在値を残す
+        recordPlaybackFailure('play-reject', video, cause)
         if (file) {
           // サイズ・コーデック・エラーコード・シーク可否を残す（実機で原因を追えるように）
           console.warn('[lightbox] 再生を開始できませんでした', mediaFailureInfo(file, video, cause))
@@ -500,12 +575,16 @@ export function Lightbox({
         }
         if (isRetry) {
           playRequestRef.current = 'none'
+          playBlockedRef.current = true
           setPlayBlocked(true)
           return
         }
         playRequestRef.current = 'retry'
+        // #32: 準備が整う前の reject（NotAllowedError など）は、描画が 2 フレーム
+        // 進んだあとにもう一度だけ試す。`canplay` が来ない環境の保険。
+        scheduleRetry()
         // `canplay` がすでに過ぎている（readyState >= HAVE_FUTURE_DATA）なら
-        // イベントを待たず、次のタスクで 1 回だけ再試行する。
+        // イベントを待たず、次のタスクでも 1 回だけ再試行する（2 フレーム待つより速い）。
         if (video.readyState >= 3) {
           window.setTimeout(() => {
             if (playRequestRef.current !== 'retry') return
@@ -526,11 +605,14 @@ export function Lightbox({
         .then(() => {
           autoPlayWanted.current = false
           playRequestRef.current = 'none'
+          playBlockedRef.current = false
           setPlayBlocked(false)
+          // 再試行で再生できたら診断バナーは消す（ログには残っている）
+          setPlayDiagnostic(null)
         })
         .catch(fail)
     },
-    [file],
+    [file, recordPlaybackFailure],
   )
   startPlaybackRef.current = startPlayback
 
@@ -545,6 +627,42 @@ export function Lightbox({
     playRequestRef.current = 'none'
     startPlayback()
   }, [startPlayback])
+
+  /**
+   * #32: 自動再生の要求が残っている（reject 後 / 再生ボタン待ち / 未試行）のに
+   * 止まっている場合、ウィンドウが前面に戻ったとき・ユーザーがクリックしたときにも
+   * もう一度だけ試す。ユーザーが自分で一時停止した場合は要求が無いので再開しない。
+   */
+  useEffect(() => {
+    if (fileKind !== 'video' || bench) return
+    const retryIfPending = (event?: Event) => {
+      // 中央の再生ボタン自身は onClick が担当する（同じクリックで二重に play しない）
+      const target = event?.target
+      if (target instanceof Element && target.closest('[data-lightbox-play-retry]')) return
+      const video = videoRef.current
+      if (!video || video.error || shieldedRef.current) return
+      if (!video.paused) return
+      const pending =
+        playRequestRef.current === 'retry' ||
+        autoPlayWanted.current ||
+        playBlockedRef.current
+      if (!pending) return
+      // まだ 1 回も試していない（autoPlayWanted だけ）なら通常の試行、
+      // reject 後 / 再生ボタン待ちなら「最後の 1 回」として扱う。
+      const lastChance = playRequestRef.current === 'retry' || playBlockedRef.current
+      playRequestRef.current = 'none'
+      autoPlayWanted.current = false
+      startPlaybackRef.current(lastChance)
+    }
+    const onFocus = () => retryIfPending()
+    const onPointerDown = (event: PointerEvent) => retryIfPending(event)
+    window.addEventListener('focus', onFocus)
+    window.addEventListener('pointerdown', onPointerDown)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('pointerdown', onPointerDown)
+    }
+  }, [bench, fileKind, fileId])
 
   /** #26: `video.seekable` からシーク可否を更新する（メタデータ / 進捗時）。 */
   const updateSeekable = useCallback((video: HTMLVideoElement) => {
@@ -878,6 +996,17 @@ export function Lightbox({
       )
     })
   }, [bench, file, pushNotice])
+
+  /** #32: 診断バナーの内容をクリップボードへ（問い合わせ用）。 */
+  const copyPlaybackDiagnostic = useCallback(async () => {
+    if (!playDiagnostic) return
+    try {
+      await navigator.clipboard.writeText(formatPlaybackDiagnosticText(playDiagnostic))
+      showNotice('診断情報をコピーしました')
+    } catch (cause) {
+      pushNotice(`診断情報をコピーできませんでした: ${describeError(cause)}`, 'error')
+    }
+  }, [playDiagnostic, pushNotice, showNotice])
 
   /** #26: 再生できない形式を、OS の関連付け（外部プレイヤー）で開く。 */
   const openExternal = useCallback(() => {
@@ -1583,6 +1712,9 @@ export function Lightbox({
               // 1 回だけ再試行する。取りこぼしても、まだ試していなければ開始する。
               const request = playRequestRef.current
               if (request === 'retry') {
+                // #32: 2 フレーム後の再試行が残っていれば、こちらを優先して 1 本に絞る
+                cancelPlaybackRetryRef.current?.()
+                cancelPlaybackRetryRef.current = null
                 playRequestRef.current = 'none'
                 autoPlayWanted.current = false
                 if (shieldedRef.current) return
@@ -1610,7 +1742,10 @@ export function Lightbox({
             onPlay={() => {
               playingRef.current = true
               setPlaying(true)
+              playBlockedRef.current = false
               setPlayBlocked(false)
+              // #32: 再生できたので診断バナーは消す（ログには残っている）
+              setPlayDiagnostic(null)
               // #47: 再生が始まったらプレビューは破棄する
               scrub.cancel()
             }}
@@ -1618,6 +1753,11 @@ export function Lightbox({
               // ユーザーの一時停止。`canplay` が後から来ても再開しない。
               playingRef.current = false
               autoPlayWanted.current = false
+              // #32: 明示的に止めたら、focus / クリックでの勝手な再開もしない
+              playRequestRef.current = 'none'
+              playBlockedRef.current = false
+              cancelPlaybackRetryRef.current?.()
+              cancelPlaybackRetryRef.current = null
               setPlaying(false)
               saveSnapshot()
             }}
@@ -1643,9 +1783,14 @@ export function Lightbox({
               if (file) {
                 console.warn('[lightbox] 動画を読み込めませんでした', mediaFailureInfo(file, video))
               }
+              // #32: メディアエラーも同じ診断バナー / ログに残す
+              recordPlaybackFailure('media-error', video)
               playRequestRef.current = 'none'
+              playBlockedRef.current = false
               autoPlayWanted.current = false
               playingRef.current = false
+              cancelPlaybackRetryRef.current?.()
+              cancelPlaybackRetryRef.current = null
               setPlayBlocked(false)
               setVideoError(true)
             }}
@@ -1747,6 +1892,70 @@ export function Lightbox({
               <FolderOpen data-icon="inline-start" />
               外部プレイヤーで開く
             </Button>
+          </div>
+        )}
+
+        {/*
+          #32: 再生失敗の理由を動画領域に小さく出す。`play()` の reject 名と
+          message、その時点の readyState / networkState / error.code / muted /
+          volume / paused を確認でき、そのまま問い合わせ用にコピーできる。
+        */}
+        {playDiagnostic && !bench && (
+          <div
+            data-lightbox-playback-diagnostic
+            className="absolute bottom-2 left-2 z-[86] w-[min(600px,calc(100%-1rem))] rounded-lg border border-destructive/60 bg-black/85 px-3 py-2 text-left text-xs text-white shadow-[0_10px_30px_rgba(0,0,0,0.55)] backdrop-blur-sm"
+          >
+            <div className="flex items-start gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="m-0 font-semibold text-[var(--destructive)]">
+                  {playDiagnostic.event === 'play-reject'
+                    ? '再生を開始できませんでした'
+                    : playDiagnostic.event === 'ready-timeout'
+                      ? '再生の準備ができません'
+                      : '動画を読み込めませんでした'}
+                </p>
+                {playDiagnostic.playName && (
+                  <p
+                    data-lightbox-playback-diagnostic-error
+                    className="m-0 mt-0.5 break-all font-mono text-[11px] text-white/85"
+                  >
+                    play(): {playDiagnostic.playName}
+                    {playDiagnostic.playMessage ? ` — ${playDiagnostic.playMessage}` : ''}
+                  </p>
+                )}
+                <p
+                  data-lightbox-playback-diagnostic-state
+                  className="m-0 mt-0.5 text-[11px] leading-snug text-white/70 tabular-nums"
+                >
+                  readyState {playDiagnostic.readyState} · networkState{' '}
+                  {playDiagnostic.networkState} · error.code{' '}
+                  {playDiagnostic.errorCode ?? 'null'} · muted{' '}
+                  {String(playDiagnostic.muted)} · volume{' '}
+                  {playDiagnostic.volume.toFixed(2)} · paused{' '}
+                  {String(playDiagnostic.paused)}
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="xs"
+                className="h-6 flex-none text-xs text-white"
+                data-lightbox-diagnostic-copy
+                onClick={() => void copyPlaybackDiagnostic()}
+              >
+                <Copy data-icon="inline-start" />
+                診断情報をコピー
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="flex-none text-white/70 hover:bg-white/10"
+                aria-label="診断を閉じる"
+                data-lightbox-diagnostic-close
+                onClick={() => setPlayDiagnostic(null)}
+              >
+                <X />
+              </Button>
+            </div>
           </div>
         )}
       </div>
