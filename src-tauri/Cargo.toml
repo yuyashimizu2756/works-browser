@@ -51,7 +51,7 @@ notify = "9"
 notify-debouncer-full = "0.8"
 # #73: ComfyUI 連携の HTTP（`GET /system_stats` / `POST /prompt`）。
 # TLS は使わない（ローカルの `http://127.0.0.1:8188` を想定）ので依存を最小限にする。
-ureq = { version = "2.12", default-features = false }
+ureq = { version = "3.5", default-features = false }
 
 # 驥崎､・ｮ滉ｽ薙・蛻､螳壹↓菴ｿ縺・(volume serial, file index) 縺ｯ std 縺ｧ縺ｯ荳榊ｮ牙ｮ・API 縺ｮ縺溘ａ Win32 繧堤峩謗･蜿ｩ縺上・
 [target.'cfg(windows)'.dependencies]
