@@ -21,6 +21,8 @@ import type {
   WorkSummary,
 } from './api'
 import type { NavRoute } from './lib/navStack'
+import { formatWarmupLogLine, startMediaWarmup } from './lib/mediaWarmup'
+import { logPlaybackLine } from './lib/playbackDiagnostics'
 import { useMouseNavButtons } from './lib/useMouseNavButtons'
 import { useNavStack } from './lib/useNavStack'
 import {
@@ -171,6 +173,20 @@ export default function App() {
       alive = false
     }
   }, [benchCount, demoMode])
+
+  /**
+   * #32: 起動後 1 本目の動画が再生されない問題の対策。非表示の `<video>` で
+   * 短い無音メディアを `play()` → `pause()` し、WebView2 のメディア初期化を
+   * 先に済ませる。失敗しても起動は止めない（診断は playback.log に残る）。
+   */
+  useEffect(() => {
+    if (benchCount !== null) return
+    void startMediaWarmup().then((result) => {
+      // ウォームアップ自体が失敗していないかも同じログで確認できる
+      void logPlaybackLine(formatWarmupLogLine(result))
+    })
+  }, [benchCount])
+
   const benchSource = useMemo(
     () =>
       benchCount === null ? undefined : createBenchSource(benchCount, demoImages),

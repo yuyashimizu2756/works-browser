@@ -15,6 +15,7 @@
 - ライトボックスを閉じずにお気に入り・評価・タグ・生成情報・スライドショー（評価は読み込み後にだけ操作し、保存失敗時は元に戻る）
 - ファイルのフルパスをカードのホバー / ビューワーのファイル名横からコピー（パスは Rust 側で解決）
 - 再生できない動画は理由と「外部プレイヤーで開く」、シークできない動画はシークバーを無効化して理由を表示
+- 再生失敗時は動画領域に理由（`play()` の reject 名・`readyState` など）を出し、診断情報をコピーできる（`playback.log` にも追記）
 - 重複・類似の検出と整理、2〜4 枚の比較とプロンプト差分
 - ComfyUI 連携（workflow を開く / API 形式で再実行）
 - プライバシーシールド（ホットキーで画面を隠す）
@@ -28,21 +29,22 @@
 
 ## インストール
 
+> **更新はアンインストールしないでください。新しい `setup.exe` をそのまま実行すれば上書きされます。**
+> 設定・索引・サムネイル・タスクバーのピン留めは保持されます。
+
 [Releases](https://github.com/yuyashimizu2756/works-browser/releases/latest) から取得します。
 
 | 形式 | 用途 |
 |---|---|
 | `works-browser_x.y.z_x64-setup.exe`（NSIS）| 推奨。ffmpeg 同梱・スタートメニュー登録 |
-| `works-browser_x.y.z_x64_en-US.msi` | MSI 配布が必要な場合 |
-| `works-browser.exe` | インストール不要。ffmpeg は別途配置 |
+| `works-browser_x.y.z_x64_en-US.msi` | MSI 配布が必要な場合（代替）|
+| `works-browser.exe` | インストール不要のポータブル版（代替。ffmpeg は別途配置）|
 
-### 更新するとき
+### ポータブル / MSI を使う場合（代替）
 
-**アンインストールは不要です。** 新しい `setup.exe` をそのまま実行すると上書き更新されます
-（設定・索引・サムネイルは保持されます）。
-
-- タスクバーにピン留めしている場合は、**アンインストールするとピンが消えます**。上書き更新なら残ります。
-- ポータブル版を使っている場合は、`works-browser.exe` を同じ場所で置き換えてください。
+- **ポータブル版**: `works-browser.exe` を同じ場所で置き換えてください。
+- **MSI**: NSIS と同じく上書きインストールできます。配布管理上 MSI が必要な場合だけ使います。
+- **アンインストールするとタスクバーのピンが消えます。** 上書き更新なら残ります。
 
 ### SmartScreen の警告について
 
@@ -120,9 +122,13 @@ npm run tauri dev
 - **スライドショー**（`S`）: 画像は 3 秒ごと、動画は再生完了で次へ送ります。
   読み込み済みの終端では停止し、まだページが残っていれば追加読み込みして続行します。
 - **動画の初回再生**: 動画を開くと `loadedmetadata` の時点で `play()` を呼び、
-  `preload="auto"` でバッファリングを開始します。`play()` が拒否されたときは
-  `canplay` で 1 回だけ再試行し、3 秒たっても `readyState < 3` なら中央の再生ボタンを
-  出します（`canplay` 待ちで固まりません）。`waiting` / `stalled` はコンソールに残します。
+  `preload="auto"` でバッファリングを開始します。起動時には非表示の `<video>` で
+  短い無音メディアを一度再生してメディア初期化を済ませます。`play()` が拒否された
+  ときは 2 フレーム後 / `canplay` / `focus` / クリックで 1 回だけ再試行し、3 秒たっても
+  `readyState < 3` なら中央の再生ボタンを出します（`canplay` 待ちで固まりません）。
+  失敗時は動画領域に理由（`play()` の reject 名・`readyState`・`networkState`・
+  `error.code`・`muted`・`volume`・`paused`）を表示し、「診断情報をコピー」で共有できます。
+  `waiting` / `stalled` はコンソールに残します。
 - **サムネイルの個別表示**: サムネ非表示中でも目アイコンで 1 ファイルだけ表示できます。
   ファイルを開いて一覧へ戻っても、開いたファイルが自動で表示されることはありません。
 - **`⋯` メニュー**: `Esc` か外側クリックで閉じ、フォーカスは開いたボタンへ戻ります。
@@ -135,6 +141,7 @@ npm run tauri dev
 | 索引 DB（リリース / 開発）| `%APPDATA%\works-browser\index.db` / `<repo>\.cache\index.db` |
 | サムネイル | `%LOCALAPPDATA%\works-browser\thumbs\` |
 | 設定 | `%APPDATA%\works-browser\config.json` |
+| 再生診断ログ | `%APPDATA%\works-browser\playback.log`（起動時のウォームアップ結果と再生失敗）|
 
 `config.json` の項目一覧は [docs/settings-design.md](./docs/settings-design.md)。
 

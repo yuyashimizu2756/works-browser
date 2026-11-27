@@ -613,6 +613,16 @@ pub fn clear_file_position(state: State<'_, AppState>, file_id: i64) -> Result<(
     db::clear_file_position(&conn, file_id).map_err(|error| error_message(&error))
 }
 
+/// #32: 再生診断の 1 行を `%APPDATA%\works-browser\playback.log` へ追記する。
+///
+/// UI は整形済みの文字列だけを渡す（パス・改行・追記方法は Rust 側が決める）。
+/// 失敗しても再生は止めないので、UI は reject を握りつぶしてよい。
+#[tauri::command]
+pub fn playback_log(state: State<'_, AppState>, line: String) -> Result<(), String> {
+    let path = crate::playback_log::log_path(&state.config_path);
+    crate::playback_log::append(&path, &line).map_err(|error| error.to_string())
+}
+
 /// エクスプローラでファイルを選択して開く（#5）。UI からはパスではなく ID を渡す。
 #[tauri::command]
 pub fn reveal_file(state: State<'_, AppState>, file_id: i64) -> Result<(), String> {

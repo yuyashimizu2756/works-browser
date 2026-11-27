@@ -763,6 +763,11 @@ export const api = {
   getFilePosition: (fileId: number) =>
     invoke<FilePosition | null>('get_file_position', { fileId }),
   clearFilePosition: (fileId: number) => invoke<void>('clear_file_position', { fileId }),
+  /**
+   * #32: 再生診断の 1 行を追記する（`%APPDATA%\works-browser\playback.log`）。
+   * UI は整形済みの文字列だけを渡し、パスや追記方法は Rust 側が決める。
+   */
+  playbackLog: (line: string) => invoke<void>('playback_log', { line }),
   /** #60: ファイルに埋め込まれた生成情報（プロンプト・モデル等）を読む。 */
   getGenerationMeta: (fileId: number) =>
     invoke<GenerationMeta | null>('get_generation_meta', { fileId }),
