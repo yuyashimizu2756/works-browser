@@ -50,6 +50,12 @@ npm run tauri dev
 | `cargo test`（`src-tauri`）| Rust のテスト |
 | `npm run visual:check` | headless Chrome で画面のスクショ回帰 |
 
+### デモ / ベンチモード
+
+`?bench=24&demo=1` を付けて起動すると、合成データとサンプル画像で画面を確認できます。
+デモ / ベンチモードは**実 DB を読み書きしません**。お気に入り・評価・タグは固定表示のみで、
+保存系の操作は無効になります（ツールチップで案内が出ます）。
+
 詳しいビルド手順は [docs/build.md](./docs/build.md)、リリース手順は
 [docs/release.md](./docs/release.md)、テストは [docs/testing.md](./docs/testing.md)。
 

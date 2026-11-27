@@ -16,6 +16,8 @@ type ButtonProps = {
   workIds: number[]
   onChanged?: () => void
   disabled?: boolean
+  /** 押せない理由のツールチップ（#14）。 */
+  title?: string
   label?: string
   variant?: 'ghost' | 'outline' | 'secondary'
   size?: 'xs' | 'sm'
@@ -26,6 +28,7 @@ export function TagEditorButton({
   workIds,
   onChanged,
   disabled = false,
+  title,
   label = 'タグ',
   variant = 'ghost',
   size = 'sm',
@@ -45,6 +48,7 @@ export function TagEditorButton({
         variant={variant}
         size={size}
         data-tag-open
+        title={title}
         disabled={disabled || workIds.length === 0}
         onClick={() => handleOpenChange(true)}
       >

@@ -471,6 +471,11 @@ export function LibraryView({
         showToast('評価する作品にフォーカスしてください（j / k）')
         return
       }
+      // #14: ベンチ / デモは実在する作品 ID へ保存しない
+      if (bench) {
+        showToast('ベンチモードでは保存されません')
+        return
+      }
       void applyMarkChange(ids, (mark) => ({
         favorite: mark.favorite,
         rating,
@@ -487,13 +492,18 @@ export function LibraryView({
           showToast(`評価を保存できませんでした: ${describeError(cause)}`),
         )
     },
-    [applyMarkChange, keyboardTargetIds, showToast],
+    [applyMarkChange, bench, keyboardTargetIds, showToast],
   )
 
   const handleKeyboardFavorite = useCallback(() => {
     const ids = keyboardTargetIds()
     if (ids.length === 0) {
       showToast('お気に入りを切り替える作品にフォーカスしてください（j / k）')
+      return
+    }
+    // #14: ベンチ / デモは実在する作品 ID へ保存しない
+    if (bench) {
+      showToast('ベンチモードでは保存されません')
       return
     }
     void applyMarkChange(ids, (mark) => ({
@@ -505,7 +515,7 @@ export function LibraryView({
       .catch((cause: unknown) =>
         showToast(`お気に入りを保存できませんでした: ${describeError(cause)}`),
       )
-  }, [applyMarkChange, keyboardTargetIds, showToast])
+  }, [applyMarkChange, bench, keyboardTargetIds, showToast])
 
   const handleFocusMove = useCallback(
     (delta: 1 | -1) => {
@@ -986,10 +996,20 @@ export function LibraryView({
     [onDeleteSelected, selectedWorks, showToast],
   )
   const handleTag = () => {
+    // #14: ベンチ / デモはタグ編集を開かない（保存しない）
+    if (bench) {
+      showToast('ベンチモードでは保存されません')
+      return
+    }
     if (onTagSelected) onTagSelected(selectedWorks)
     else if (selectedWorks.length > 0) setTagOpen(true)
   }
   const handleRate = () => {
+    // #14: ベンチ / デモは一括評価を開かない（保存しない）
+    if (bench) {
+      showToast('ベンチモードでは保存されません')
+      return
+    }
     if (onRateSelected) onRateSelected(selectedWorks)
     else if (selectedWorks.length > 0) setMarkOpen(true)
   }
