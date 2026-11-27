@@ -78,9 +78,19 @@ npm run test:watch  # 変更を監視
 | `src/lib/volume.ts` | 起動時の音量 0 / ミュート、解除・スライダー | `tests/volume.test.ts` |
 | `src/lib/undo.ts` | Undo の残り時間・期限切れ・進捗（純粋モデル） | `tests/undo.test.ts` |
 | `src/lib/navStack.ts` | 画面履歴の push / 戻る / 進む / 上限（#33） | `tests/nav-stack.test.ts` |
+| `src/lib/lightbox.ts` | 削除後の index / スライドショーの終端判定（#16） | `tests/lightbox-index.test.ts` / `tests/lightbox-slideshow.test.ts` |
 | `src/library/useWorkFeed.ts` | 検索デバウンス | `tests/useDebouncedValue.test.tsx` |
 | `src/library/ChipButton.tsx` | フィルタチップの `aria-pressed` とクリック | `tests/ChipButton.test.tsx` |
 | `src/library/shield/*` | シールドのホットキー・長押し・設定・動画ミュート | `tests/privacy-shield.test.ts` |
+
+ライトボックスの回帰（#16）は、純粋関数と実配線の両方を確認します。
+
+| テスト | 内容 |
+|---|---|
+| `tests/lightbox-index.test.ts` | 最後の 1 枚を削除 → 前のファイル / 末尾は clamp / 0 件なら閉じる |
+| `tests/lightbox-slideshow.test.ts` | 終端で停止・`hasMore` 中は追加読み込み・読み込み中は待つ |
+| `tests/lightbox-menu-gestures.test.tsx` | メニューの `Esc` / 外側クリックとフォーカス復帰、タグ入力中の `t` / `1`、動画の再生完了で次へ |
+| `tests/lightbox-delete-index.test.tsx` | 削除 → 一覧の読み直し後に履歴（`fileIndex`）も 1 つ前へ / 空なら閉じる |
 
 **新規テストが落ちたら CI の `Frontend unit tests` が赤くなります。**
 わざと壊して確認する場合:
@@ -150,9 +160,13 @@ npm run visual:check -- --strict
    - 作品詳細（デモ画像つき）: `/?bench=24&demo=1&detail=3`
    - ライトボックス（#8）: `/?bench=24&demo=1&detail=3&thumbs=shown&lightbox=1`
      （`&lightboxMenu=1` / `&lightboxMeta=1` でメニュー・生成情報パネルを開いた状態）
-   - ライトボックスの可読性（#15）は **1440×900 / 1280×800 / 800×600** の 3 サイズで
-     撮影（`lightbox-1440x900.png` / `lightbox-1280x800.png` / `lightbox-800x600.png`）。
-     動画のキー案内は `&lightboxVideo=1` の `lightbox-video.png` で確認する
+   - ライトボックス系（#16）は **1440×900 / 1280×800 / 800×600** の 3 サイズで撮影する。
+     `lightbox-<size>.png` に加え、**`lightbox-menu-<size>.png` / `lightbox-meta-<size>.png` /
+     `lightbox-video.png`** も比較対象に含める
+   - **DOM の assert（#16）**: ライトボックス系は撮影前に `--dump-dom` で
+     `data-lightbox`（メニューは `data-lightbox-menu`、生成情報は `data-meta-panel`）を確認し、
+     無ければその場でエラーにする。自動オープンが壊れて背景が撮れても、差分 0% で
+     通ってしまうことがない
    - シールド: `/?bench=24&shield=1`
 4. `D:\Projects\visual\<name>.png` に保存
 5. 前回の `<name>.png` とピクセル単位で比較し、差が **2% 超**なら警告

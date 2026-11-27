@@ -40,6 +40,7 @@ import { defaultFileDirFor } from './sortPrefs'
 import { SortMenu, ThumbnailToggle } from './Toolbar'
 import type { FilePageSource } from './useFileFeed'
 import { dbWorkFileSource, useFileFeed, WORK_FILE_PAGE_SIZE } from './useFileFeed'
+import { clampLightboxIndex, lightboxIndexAfterDelete } from '../lib/lightbox'
 import { lightboxVisualFromUrl } from './visualLightbox'
 
 /**
@@ -226,13 +227,72 @@ export function WorkDetail({
     if (selectionResetToken > 0) clearSelection()
   }, [selectionResetToken, clearSelection])
 
+  /**
+   * #16: ライトボックスから削除したときの「どこを見ていたか」。
+   * 一覧が読み直されたら `lightboxIndexAfterDelete` で index を計算し直し、
+   * 表示（`Math.min`）だけでなく履歴（`route.fileIndex`）も更新する。
+   */
+  const pendingDeletion = useRef<{
+    files: FileSummary[]
+    index: number
+    ids: number[]
+    refreshToken: number
+  } | null>(null)
+
+  const requestDeleteFiles = useCallback(
+    (files: FileSummary[], intent: DeleteIntent) => {
+      if (lightboxIndex !== null && files.length > 0) {
+        pendingDeletion.current = {
+          files: feed.files,
+          index: lightboxIndex,
+          ids: files.map((file) => file.id),
+          refreshToken,
+        }
+      }
+      onDeleteSelected?.(files, intent)
+    },
+    [feed.files, lightboxIndex, onDeleteSelected, refreshToken],
+  )
+
   const handleDelete = useCallback(
     (permanent = false) => {
       if (selectedFiles.length === 0) return
-      onDeleteSelected?.(selectedFiles, { permanent })
+      requestDeleteFiles(selectedFiles, { permanent })
     },
-    [onDeleteSelected, selectedFiles],
+    [requestDeleteFiles, selectedFiles],
   )
+
+  /**
+   * #16: 削除 → 一覧の読み直し（`refreshToken` の更新）が終わったら index を直す。
+   * 残り 0 件ならライトボックスを閉じる（`null`）。
+   */
+  useEffect(() => {
+    if (lightboxIndex === null) {
+      pendingDeletion.current = null
+      return
+    }
+    if (feed.status === 'loading') return
+    const pending = pendingDeletion.current
+    if (pending) {
+      // 削除要求のあと、まだ読み直しが始まっていない
+      if (pending.refreshToken === refreshToken) return
+      pendingDeletion.current = null
+      const next = lightboxIndexAfterDelete({
+        files: pending.files,
+        index: pending.index,
+        deletedIds: pending.ids,
+      })
+      if (next === null) {
+        setLightboxIndex(null)
+      } else if (next !== lightboxIndex) {
+        setLightboxIndex(next)
+      }
+      return
+    }
+    // 別経路（Undo の取り消しなど）で一覧が縮んだときも末尾へ丸める
+    const clamped = clampLightboxIndex(lightboxIndex, feed.files.length)
+    if (clamped !== null && clamped !== lightboxIndex) setLightboxIndex(clamped)
+  }, [feed.files.length, feed.status, lightboxIndex, refreshToken, setLightboxIndex])
 
   // Delete / Shift+Delete で選択ファイルを削除（Esc は上のハンドラが戻る）。
   useEffect(() => {
@@ -738,7 +798,7 @@ export function WorkDetail({
         <Suspense fallback={null}>
           <Lightbox
             files={feed.files}
-            index={Math.min(lightboxIndex, Math.max(0, feed.files.length - 1))}
+            index={clampLightboxIndex(lightboxIndex, feed.files.length) ?? 0}
             hasMore={feed.hasMore}
             loadingMore={feed.status === 'loading'}
             onRequestMore={feed.loadMore}
@@ -753,7 +813,7 @@ export function WorkDetail({
             rootRealPath={bench ? 'D:\\bench\\synthetic' : rootRealPath}
             onDeleteFile={
               onDeleteSelected
-                ? (file) => onDeleteSelected([file], { permanent: false })
+                ? (file) => requestDeleteFiles([file], { permanent: false })
                 : undefined
             }
           />
