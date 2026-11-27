@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/button'
 import { api } from '../api'
 import type { FileSummary, WorkMark } from '../api'
 import type { GenerationMeta } from '../api'
+import { reinitializeAudioOutput } from '../lib/audioOutput'
 import { formatBytes, formatDuration, formatShortDate, describeError } from '../lib/format'
 import { fileAbsolutePath } from '../lib/path'
 import { matchesShortcut } from '../lib/shortcuts'
@@ -156,6 +157,8 @@ export function Lightbox({
   const initialPlayback = useRef(readPlaybackPreference())
   const [volume, setVolume] = useState(initialPlayback.current.volume)
   const [muted, setMuted] = useState(initialPlayback.current.muted)
+  /** #12: ミュート解除（true → false）を 1 回だけ検出するための前回値。 */
+  const wasMutedRef = useRef(muted)
   const [resumeMs, setResumeMs] = useState<number | null>(null)
   // #60: 生成メタデータ（プロンプト・モデル等）の表示
   const [metaOpen, setMetaOpen] = useState(visualLightbox?.meta ?? false)
@@ -233,6 +236,21 @@ export function Lightbox({
   useEffect(() => {
     applyVideoState()
   }, [applyVideoState, volume, muted, rate, shielded, fileId])
+
+  /**
+   * #12: ミュート解除（`muted: true → false`）では、WebView2 の音声出力が
+   * 初期化されないまま無音になることがある。状態を反映する上の effect の後に、
+   * 再生中なら `play()` をやり直し、`pause()` → `play()` のフォールバックを
+   * 1 回だけ行う。停止中・シールド中は勝手に再生しないので何もしない。
+   */
+  useEffect(() => {
+    const wasMuted = wasMutedRef.current
+    wasMutedRef.current = muted
+    if (!wasMuted || muted) return
+    const video = videoRef.current
+    if (!video || bench || shieldedRef.current) return
+    reinitializeAudioOutput(video)
+  }, [bench, muted])
 
   // #10: WebView2 側で `volume` が変わっても data 属性が実値に追随するようにする。
   useEffect(() => {
@@ -569,7 +587,7 @@ export function Lightbox({
     if (next.volume <= 0) {
       setAudioNotice('音量が 0 のため音が出ません。音量スライダーで上げてください')
     } else {
-      setAudioNotice(`音声をオンにしました（音量 ${Math.round(next.volume * 100)}%）`)
+      setAudioNotice(`音声を有効化しました（音量 ${Math.round(next.volume * 100)}%）`)
     }
   }, [muted, volume])
 

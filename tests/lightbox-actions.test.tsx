@@ -239,3 +239,76 @@ describe('#10 音量・ミュート', () => {
     expect(video.volume).toBe(0)
   })
 })
+
+describe('#12 解除時の音声再初期化', () => {
+  function mediaVideo(): HTMLVideoElement {
+    return document.querySelector<HTMLVideoElement>('video:not([data-scrub-preview-video])')!
+  }
+
+  const videoFile = (id: number) =>
+    makeFile({ id, kind: 'video', name: `v${id}.mp4`, duration_ms: 10_000 })
+
+  it('再生中の解除で play() を再実行し、位置と速度を保持する', async () => {
+    renderLightbox({ files: [videoFile(31)] })
+    const video = mediaVideo()
+    const play = vi.mocked(window.HTMLMediaElement.prototype.play)
+    const pause = vi.mocked(window.HTMLMediaElement.prototype.pause)
+    play.mockClear()
+    pause.mockClear()
+    // jsdom の `paused` は常に true なので、再生中を再現する
+    Object.defineProperty(video, 'paused', { configurable: true, get: () => false })
+    video.currentTime = 42
+    fireEvent.change(screen.getByLabelText('再生速度'), { target: { value: '1.5' } })
+    expect(video.playbackRate).toBe(1.5)
+
+    fireEvent.click(screen.getByLabelText('ミュート解除'))
+
+    await waitFor(() => expect(video.dataset.audioReinit).toBe('1'))
+    expect(video.muted).toBe(false)
+    expect(video.volume).toBeCloseTo(0.6, 5)
+    // 「状態反映後の play()」と「pause() → play() のフォールバック」で 2 回
+    expect(play).toHaveBeenCalledTimes(2)
+    expect(pause).toHaveBeenCalledTimes(1)
+    expect(video.currentTime).toBeCloseTo(42, 5)
+    expect(video.playbackRate).toBeCloseTo(1.5, 5)
+  })
+
+  it('停止中は解除しても play() を呼ばない（勝手に再生しない）', async () => {
+    renderLightbox({ files: [videoFile(32)] })
+    const video = mediaVideo()
+    const play = vi.mocked(window.HTMLMediaElement.prototype.play)
+    play.mockClear()
+
+    fireEvent.click(screen.getByLabelText('ミュート解除'))
+
+    await waitFor(() => expect(video.muted).toBe(false))
+    expect(play).not.toHaveBeenCalled()
+    expect(video.dataset.audioReinit).toBeUndefined()
+  })
+
+  it('シールド中は解除しても再初期化しない', async () => {
+    renderLightbox({ files: [videoFile(33)], shielded: true })
+    const video = mediaVideo()
+    const play = vi.mocked(window.HTMLMediaElement.prototype.play)
+    play.mockClear()
+    Object.defineProperty(video, 'paused', { configurable: true, get: () => false })
+
+    fireEvent.click(screen.getByLabelText('ミュート解除'))
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-lightbox-audio-notice]')).not.toBeNull(),
+    )
+    expect(play).not.toHaveBeenCalled()
+    expect(video.dataset.audioReinit).toBeUndefined()
+  })
+
+  it('解除時に「音声を有効化しました（音量 60%）」を通知する', async () => {
+    renderLightbox({ files: [videoFile(34)] })
+    fireEvent.click(screen.getByLabelText('ミュート解除'))
+    await waitFor(() =>
+      expect(document.querySelector('[data-lightbox-audio-notice]')?.textContent).toBe(
+        '音声を有効化しました（音量 60%）',
+      ),
+    )
+  })
+})
