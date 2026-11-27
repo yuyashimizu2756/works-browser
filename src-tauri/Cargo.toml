@@ -1,6 +1,6 @@
 [package]
 name = "works-browser"
-version = "0.2.3"
+version = "0.2.4"
 description = "Local browser for curated artwork folders"
 authors = ["yuyashimizu2756"]
 edition = "2021"
