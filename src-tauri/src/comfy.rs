@@ -236,16 +236,29 @@ pub fn check(config: &AppConfig) -> ComfyStatus {
     let endpoint = system_stats_url(&base);
 
     match agent().get(&endpoint).call() {
-        Ok(response) => {
-            let body = response.into_string().unwrap_or_default();
-            let version = serde_json::from_str::<Value>(&body)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .pointer("/system/comfyui_version")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string)
-                });
+        Ok(mut response) => {
+            let status = response.status().as_u16();
+            // 本文の読み取り失敗は従来どおり「空の応答」として扱う
+            let body = response.body_mut().read_to_string().unwrap_or_default();
+            // 4xx / 5xx は http_status_as_error(false) で Ok として返るので、
+            // ここで ureq 2 の Error::Status と同じ扱いにする
+            if is_http_error(status) {
+                return ComfyStatus {
+                    ok: false,
+                    url: endpoint,
+                    version: None,
+                    message: format!(
+                        "ComfyUI が応答しましたがエラーです（HTTP {status}）: {}",
+                        error_detail(&body)
+                    ),
+                };
+            }
+            let version = serde_json::from_str::<Value>(&body).ok().and_then(|value| {
+                value
+                    .pointer("/system/comfyui_version")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            });
             let message = match &version {
                 Some(version) => format!("接続できました（ComfyUI {version}）"),
                 None => "接続できました（/system_stats が応答しました）".to_string(),
@@ -257,25 +270,11 @@ pub fn check(config: &AppConfig) -> ComfyStatus {
                 message,
             }
         }
-        Err(ureq::Error::Status(code, response)) => {
-            let body = response.into_string().unwrap_or_default();
-            ComfyStatus {
-                ok: false,
-                url: endpoint,
-                version: None,
-                message: format!(
-                    "ComfyUI が応答しましたがエラーです（HTTP {code}）: {}",
-                    error_detail(&body)
-                ),
-            }
-        }
-        Err(ureq::Error::Transport(error)) => ComfyStatus {
+        Err(error) => ComfyStatus {
             ok: false,
             url: endpoint.clone(),
             version: None,
-            message: format!(
-                "ComfyUI に接続できません（{endpoint}）。ComfyUI が起動しているか、URL が正しいか確認してください: {error}"
-            ),
+            message: transport_message(&endpoint, &error),
         },
     }
 }
@@ -301,22 +300,33 @@ pub fn queue(config: &AppConfig, api_prompt: &str) -> Result<ComfyQueueResult, S
 
     let result = agent()
         .post(&endpoint)
-        .set("Content-Type", "application/json")
-        .send_string(&body);
+        .header("Content-Type", "application/json")
+        .send(body.as_str());
 
     match result {
-        Ok(response) => {
-            let text = response.into_string().unwrap_or_default();
-            parse_prompt_response(&endpoint, &text)
+        Ok(mut response) => {
+            let status = response.status().as_u16();
+            let text = response.body_mut().read_to_string().unwrap_or_default();
+            if is_http_error(status) {
+                Err(status_message(status, &text))
+            } else {
+                parse_prompt_response(&endpoint, &text)
+            }
         }
-        Err(ureq::Error::Status(code, response)) => {
-            let text = response.into_string().unwrap_or_default();
-            Err(status_message(code, &text))
-        }
-        Err(ureq::Error::Transport(error)) => Err(format!(
-            "ComfyUI に接続できません（{endpoint}）。ComfyUI が起動しているか、URL が正しいか確認してください: {error}"
-        )),
+        Err(error) => Err(transport_message(&endpoint, &error)),
     }
+}
+
+/// 4xx / 5xx を HTTP エラーとして扱う（ureq 2 の `Error::Status` と同じ範囲）。
+fn is_http_error(status: u16) -> bool {
+    (400..600).contains(&status)
+}
+
+/// 接続できなかったときの日本語メッセージ。ureq のエラー型をここで文字列に変換する。
+fn transport_message(endpoint: &str, error: &ureq::Error) -> String {
+    format!(
+        "ComfyUI に接続できません（{endpoint}）。ComfyUI が起動しているか、URL が正しいか確認してください: {error}"
+    )
 }
 
 /// `/prompt` の 200 応答から `prompt_id` を取り出す。
@@ -453,7 +463,18 @@ pub fn new_client_id() -> String {
 }
 
 fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new().timeout(HTTP_TIMEOUT).build()
+    // ureq 3 の Agent は Config から作る。
+    // - timeout_global: 応答本文の読み取りまで含めた 1 回の呼び出しの上限
+    //   （ureq 2 の `AgentBuilder::timeout` に相当）。
+    // - http_status_as_error(false): 4xx / 5xx でも本文を読んで、日本語メッセージに
+    //   理由（ComfyUI の error 詳細）を載せられるようにする。
+    // - max_redirects(5): ureq 2 の既定と同じ回数。
+    ureq::Agent::config_builder()
+        .timeout_global(Some(HTTP_TIMEOUT))
+        .http_status_as_error(false)
+        .max_redirects(5)
+        .build()
+        .new_agent()
 }
 
 // ---------------------------------------------------------------------------
@@ -733,6 +754,24 @@ mod tests {
             "{detail}"
         );
         assert_eq!(error_detail(""), "（応答なし）");
+    }
+
+    #[test]
+    fn transport_error_becomes_japanese_message() {
+        let endpoint = "http://127.0.0.1:8188/system_stats";
+        let message = transport_message(endpoint, &ureq::Error::HostNotFound);
+        assert!(message.contains("ComfyUI に接続できません"), "{message}");
+        assert!(message.contains(endpoint), "{message}");
+        assert!(message.contains("起動しているか"), "{message}");
+
+        // 4xx / 5xx だけをエラー扱いする（ureq 2 の Error::Status と同じ範囲）
+        assert!(!is_http_error(200));
+        assert!(!is_http_error(304));
+        assert!(!is_http_error(399));
+        assert!(is_http_error(400));
+        assert!(is_http_error(500));
+        assert!(is_http_error(599));
+        assert!(!is_http_error(600));
     }
 
     #[test]
