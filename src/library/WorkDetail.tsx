@@ -301,16 +301,23 @@ export function WorkDetail({
       rating: number | null
       note?: string | null
     }) => {
+      // #14: ベンチ / デモは実在する作品 ID へ保存しない
+      if (bench) return
       const mark = await tagData().getWorkMark(work.id)
       await tagData().setWorkMark(work.id, change(mark))
       // ヘッダの星 / ハート（WorkMarksBar）を読み直す
       notifyMarkChanged(work.id)
     },
-    [work.id],
+    [bench, work.id],
   )
 
   const handleRate = useCallback(
     (rating: number | null) => {
+      // #14: ベンチ / デモでは保存せず、理由だけ案内する
+      if (bench) {
+        showToast('ベンチモードでは保存されません')
+        return
+      }
       void applyWorkMark((mark) => ({
         favorite: mark.favorite,
         rating,
@@ -319,10 +326,15 @@ export function WorkDetail({
         .then(() => showToast(rating === null ? '未評価に戻しました' : `★${rating} に評価しました`))
         .catch((cause: unknown) => showToast(`評価を保存できませんでした: ${describeError(cause)}`))
     },
-    [applyWorkMark, showToast],
+    [applyWorkMark, bench, showToast],
   )
 
   const handleFavorite = useCallback(() => {
+    // #14: ベンチ / デモでは保存せず、理由だけ案内する
+    if (bench) {
+      showToast('ベンチモードでは保存されません')
+      return
+    }
     void applyWorkMark((mark) => ({
       favorite: !mark.favorite,
       rating: mark.rating,
@@ -332,7 +344,7 @@ export function WorkDetail({
       .catch((cause: unknown) =>
         showToast(`お気に入りを保存できませんでした: ${describeError(cause)}`),
       )
-  }, [applyWorkMark, showToast])
+  }, [applyWorkMark, bench, showToast])
 
   const handleFocusMove = useCallback(
     (delta: 1 | -1) => {
@@ -683,7 +695,7 @@ export function WorkDetail({
           className="m-0 flex-none bg-[var(--surface)] px-6 py-1.5 text-xs text-[var(--warning)]"
           role="note"
         >
-          ベンチモード: 合成 {formatCount(summary.file_count)} ファイル。{' '}
+          ベンチモード: 合成 {formatCount(summary.file_count)} ファイル。評価・タグは保存されません。{' '}
           <code>window.__worksBench.start()</code> でスクロール性能を計測できます。
         </p>
       )}
@@ -732,7 +744,9 @@ export function WorkDetail({
             onClose={() => setLightboxIndex(null)}
             bench={bench}
             shielded={shielded}
-            workId={work.id}
+            // #14: ベンチ / デモは実在する作品 ID を渡さない（保存系の操作は
+            // `workId === undefined` の既存分岐で出ない / 無効になる）
+            workId={bench ? undefined : work.id}
             // ベンチは合成データなので実パスが無い。スクショ用に固定の例を渡す。
             rootRealPath={bench ? 'D:\\bench\\synthetic' : rootRealPath}
             onDeleteFile={

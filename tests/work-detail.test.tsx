@@ -98,6 +98,7 @@ function renderDetail(overrides: {
   onBack?: () => void
   onDeleteWork?: (work: typeof WORK, intent: { permanent: boolean }) => void
   thumbnailVisible?: boolean
+  bench?: boolean
 } = {}) {
   const onBack = overrides.onBack ?? vi.fn()
   const onDeleteWork = overrides.onDeleteWork ?? vi.fn()
@@ -110,7 +111,7 @@ function renderDetail(overrides: {
       onToggleThumbnails={vi.fn()}
       shielded={false}
       source={source}
-      bench
+      bench={overrides.bench ?? true}
       refreshToken={0}
       onDeleteWork={onDeleteWork}
       onBack={onBack}
@@ -143,7 +144,7 @@ afterEach(() => {
 
 describe('#99 作品詳細', () => {
   it('ヘッダは題名 32px / メタ 1 行 / 評価の独立行で、未評価は 1 箇所だけ', async () => {
-    renderDetail()
+    renderDetail({ bench: false })
 
     const title = screen.getByRole('heading', { name: 'ベンチ作品 0003' })
     expect(title.className).toContain('type-display')
