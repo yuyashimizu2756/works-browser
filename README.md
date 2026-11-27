@@ -34,6 +34,25 @@
 | `works-browser_x.y.z_x64_en-US.msi` | MSI 配布が必要な場合 |
 | `works-browser.exe` | インストール不要。ffmpeg は別途配置 |
 
+### SmartScreen の警告について
+
+署名なしの配布物のため、初回起動時に **「Windows によって PC が保護されました」**（不明な発行元）が
+出ることがあります。これは Windows の仕様で、コード署名がない限り表示されます。
+
+1. 「**詳細情報**」→「**実行**」で起動できます
+2. ダウンロードしたファイルを事前に許可する場合:
+
+   ```powershell
+   Unblock-File .\works-browser_0.2.6_x64-setup.exe
+   ```
+
+3. 改ざん確認: 各リリースの **SHA-256** を Releases に記載しています。
+
+   ```powershell
+   Get-FileHash .\works-browser_0.2.6_x64-setup.exe -Algorithm SHA256
+   ```
+
+
 ## 開発
 
 ```powershell
