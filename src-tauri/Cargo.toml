@@ -1,0 +1,99 @@
+[package]
+name = "works-browser"
+version = "0.2.3"
+description = "Local browser for curated artwork folders"
+authors = ["yuyashimizu2756"]
+edition = "2021"
+# bin 縺・2 縺､・医い繝励Μ譛ｬ菴薙→險域ｸｬ逕ｨ bench・峨↓縺ｪ縺｣縺溘・縺ｧ縲ゝauri 縺梧悽菴薙ｒ驕ｸ縺ｹ繧九ｈ縺・↓縺吶ｋ
+default-run = "works-browser"
+
+[lib]
+# Tauri 縺ｮ繝｢繝舌う繝ｫ蟇ｾ蠢懊ｒ隕区紺縺医◆讓呎ｺ匁ｧ区・・医ョ繧ｹ繧ｯ繝医ャ繝励〒縺ｯ rlib 縺ｨ縺励※菴ｿ縺・ｼ・
+name = "works_browser_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# 開発用 CLI（bench / smoke）を含める。既定ではビルドしない＝配布物に入らない（#65）
+dev-tools = []
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# `protocol-asset`: 繧ｵ繝繝阪う繝ｫ・・LOCALAPPDATA%・峨ｒ <img src="asset://..."> 縺ｧ隱ｭ繧縺溘ａ
+tauri = { version = "2", features = ["protocol-asset"] }
+# #25: 繝輔か繝ｫ繝驕ｸ謚槭ム繧､繧｢繝ｭ繧ｰ・・S 讓呎ｺ厄ｼ峨Ｄapability 縺ｫ dialog:allow-open 縺悟ｿ・ｦ・
+tauri-plugin-dialog = "2"
+# #22: 繧ｰ繝ｭ繝ｼ繝舌Ν繝帙ャ繝医く繝ｼ・・trl+Shift+P・峨ゅい繝励Μ髱槭い繧ｯ繝・ぅ繝悶〒繧ら匱轣ｫ縺吶ｋ縲・
+tauri-plugin-global-shortcut = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 邏｢蠑・DB縲Ｃundled 縺ｧ SQLite 譛ｬ菴薙ｒ蜷梧｢ｱ縺吶ｋ・・TS5 繧よ怏蜉ｹ・峨・
+rusqlite = { version = "0.43", features = ["bundled"] }
+# 繝・ぅ繝ｬ繧ｯ繝医Μ襍ｰ譟ｻ・・ollow_links(false)・・
+walkdir = "2.5"
+# #50: 初回走査のディレクトリ列挙を並列化する
+jwalk = "0.8"
+# 繝｡繧ｿ繝・・繧ｿ蜿門ｾ励・繝上ャ繧ｷ繝･遲峨・荳ｦ蛻怜喧
+rayon = "1.12"
+thiserror = "2"
+# 繧ｵ繝繝阪う繝ｫ・育判蜒擾ｼ・ 繝・さ繝ｼ繝峨→邵ｮ蟆上・VIF 縺ｯ繝薙Ν繝峨′驥阪＞縺ｮ縺ｧ蟇ｾ雎｡螟・
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "webp"] }
+# 繧ｵ繝繝阪う繝ｫ・育判蜒擾ｼ・ 蜩∬ｳｪ謖・ｮ壹▽縺・WebP 繧ｨ繝ｳ繧ｳ繝ｼ繝会ｼ・ibwebp 繧貞酔譴ｱ・・
+webp = { version = "0.3", default-features = false }
+# 繧ｵ繝繝阪う繝ｫ・医く繝｣繝・す繝･蜷搾ｼ・ sha1
+sha1 = "0.11"
+# #15: 繧ｴ繝溽ｮｱ縺ｸ縺ｮ遘ｻ蜍包ｼ・indows 縺ｯ IFileOperation・峨→蠕ｩ蜈・
+trash = "5.4"
+# #7: 繝輔か繝ｫ繝逶｣隕悶・ 遘偵ョ繝舌え繝ｳ繧ｹ縺ｯ debouncer-full縲＾S 騾夂衍縺ｯ notify 譛ｬ菴薙・
+# 霑ｽ蜉縺ｮ驥阪＞萓晏ｭ假ｼ・B 繧・撼蜷梧悄繝ｩ繝ｳ繧ｿ繧､繝・峨・蜈･繧後↑縺・・
+notify = "9"
+notify-debouncer-full = "0.8"
+# #73: ComfyUI 連携の HTTP（`GET /system_stats` / `POST /prompt`）。
+# TLS は使わない（ローカルの `http://127.0.0.1:8188` を想定）ので依存を最小限にする。
+ureq = { version = "2.12", default-features = false }
+
+# 驥崎､・ｮ滉ｽ薙・蛻､螳壹↓菴ｿ縺・(volume serial, file index) 縺ｯ std 縺ｧ縺ｯ荳榊ｮ牙ｮ・API 縺ｮ縺溘ａ Win32 繧堤峩謗･蜿ｩ縺上・
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Storage_FileSystem",
+  "Win32_Foundation",
+  # #10: 險域ｸｬ逕ｨ CLI・・rc/bin/bench.rs・峨・繝斐・繧ｯ RSS縲Ｑsapi 縺ｮ GetProcessMemoryInfo縲・
+  "Win32_System_ProcessStatus",
+  "Win32_System_Threading",
+] }
+# #22: Alt+Tab 繝励Ξ繝薙Η繝ｼ髯､螟厄ｼ・WMWA_EXCLUDED_FROM_PEEK・峨→
+# 逕ｻ髱｢繧ｭ繝｣繝励メ繝｣髯､螟厄ｼ・etWindowDisplayAffinity / WDA_EXCLUDEFROMCAPTURE・峨・
+# Tauri 2.12 縺御ｽｿ縺・windows 0.62 縺ｨ謠・∴繧具ｼ・WND 縺ｮ蝙九ｒ蜈ｱ譛峨☆繧九◆繧・ｼ峨・
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Dwm",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+png = "0.18"
+kamadak-exif = "0.6"
+
+[dev-dependencies]
+tempfile = "3"
+
+# #86: 配布物のサイズ削減。opt-level（既定 3）と panic（既定 unwind）は変えない。
+# portable exe は 15.26 MB → 14.89 MB（`npm run tauri build` / 2026-11-26 実測）。
+# `lto = true` + `codegen-units = 1` は 13.96 MB まで縮むがビルド時間が 2.7 倍になるため、
+# 1.85 倍に収まる thin LTO + codegen-units 2 を採用した（詳細は PR / docs/build.md）。
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 2
+
+# #65: 開発用 CLI は `--features dev-tools` のときだけビルドする。
+# 既定のビルドに含めないことで、インストーラに bench.exe / smoke.exe が入らない。
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "smoke"
+path = "src/bin/smoke.rs"
+required-features = ["dev-tools"]

@@ -1,0 +1,30 @@
+name: 機能要望
+description: こういうふうに使いたい
+labels: ['type:feat']
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 困っていること
+      description: 今の使い方で何に時間がかかる / 何ができないか
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: 欲しい形
+      description: 画面・操作のイメージ。代替案があればそれも
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: 領域
+      options:
+        - 索引・スキャン
+        - サムネイル
+        - 動画再生
+        - 画像表示
+        - UI
+        - 設定
+        - その他

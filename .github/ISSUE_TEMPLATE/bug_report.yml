@@ -1,0 +1,48 @@
+name: バグ報告
+description: 動作がおかしい・落ちる
+labels: ['type:task']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        再現手順があると解決が早くなります。スクリーンショットやログも貼ってください。
+  - type: textarea
+    id: what
+    attributes:
+      label: 起きたこと
+      description: 期待した動作と、実際の動作
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順
+      placeholder: |
+        1. ライブラリで 〜 を開く
+        2. 動画の 〜 をシーク
+        3. 〜
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: バージョン / コミット
+      placeholder: v0.1.0 / 1a2b3c4
+  - type: dropdown
+    id: area
+    attributes:
+      label: 影響範囲
+      options:
+        - 索引・スキャン
+        - サムネイル
+        - 動画再生
+        - 画像表示
+        - UI
+        - ビルド・配布
+        - その他
+  - type: textarea
+    id: logs
+    attributes:
+      label: ログ
+      description: `%APPDATA%\\works-browser\\logs` の該当部分
+      render: shell

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 使い方・計画
+    url: https://github.com/yuyashimizu2756/works-browser/blob/main/PLAN.md
+    about: 設計とロードマップはこちら

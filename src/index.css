@@ -1,0 +1,400 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/*
+ * #49: フォントは latin サブセットだけを同梱する（cyrillic / vietnamese / latin-ext は
+ * 読み込まない）。`@import "@fontsource-variable/geist"` は全 5 サブセット 74KB を
+ * 出力していたため、latin（約 29KB）の @font-face を直接書く。`font-display: swap` は維持。
+ */
+@font-face {
+  font-family: 'Geist Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('@fontsource-variable/geist/files/geist-latin-wght-normal.woff2')
+    format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * #96 デザイントークン（Gallery minimal / ダークのみ）
+ *
+ * 値の正はこの 1 箇所。画面側は `var(--xxx)` か、対応する Tailwind クラス
+ * （p-1 = 4px … p-12 = 48px、text-xs = 12px …）だけを使う。
+ * アクセントは紫 1 色。状態（選択・フォーカス・主要操作）以外では使わない。
+ */
+:root {
+  /* 余白 4 / 8 / 12 / 16 / 24 / 32 / 48 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+
+  /* 角丸 8（操作系）/ 12（カード）/ 16（パネル） */
+  --radius-control: 8px;
+  --radius-card: 12px;
+  --radius-panel: 16px;
+
+  /* 背景 */
+  --bg: #0a0a0c;
+  --surface: #111116;
+  --raised: #17171d;
+
+  /* 罫線 */
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.12);
+  /* #96 polish: ポップオーバーの輪郭（border-strong） */
+  --border-strong: rgba(255, 255, 255, 0.12);
+
+  /* 文字（tertiary は 11px 以上のラベル専用。本文には使わない） */
+  --text-primary: #ededf2;
+  --text-secondary: #a4a4b3;
+  --text-tertiary: #7c7c8c;
+
+  /* アクセント（紫 1 色） */
+  --brand: #7c6cff;
+  --brand-contrast: #0a0a0c;
+
+  /*
+   * #108: 21px 以上の見出しだけに使う表示用フォント。
+   * Windows 標準の Segoe UI Variable Display（無ければ Segoe UI）。
+   * 追加アセットは同梱しない。
+   */
+  --font-display: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
+
+  /* 文字サイズ 11 / 12 / 13 / 15 / 21 / 32 */
+  --font-size-11: 11px;
+  --font-size-12: 12px;
+  --font-size-13: 13px;
+  --font-size-15: 15px;
+  --font-size-21: 21px;
+  --font-size-32: 32px;
+
+  /* 行間 */
+  --leading-body: 1.5;
+  --leading-heading: 1.3;
+
+  /* 動き（prefers-reduced-motion で無効化） */
+  --ease-standard: cubic-bezier(0.2, 0.7, 0.3, 1);
+  --duration-fast: 160ms;
+
+  /* フォーカス 2px リング + offset 2 */
+  --focus-width: 2px;
+  --focus-offset: 2px;
+
+  /* ポップオーバー / ダイアログの浮き（#96 から 1 箇所に集約） */
+  --shadow-panel: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+/*
+ * shadcn / Tailwind の配色スロットを #96 のトークンへ寄せる。
+ * `--primary` などは既存コンポーネントが広く参照しているため、ここで 1 回だけ対応づける。
+ */
+@theme inline {
+  --font-sans: 'Geist Variable', system-ui, 'Segoe UI', 'Yu Gothic UI', 'Hiragino Sans',
+    'Noto Sans JP', sans-serif;
+  --font-mono: 'Cascadia Code', 'Consolas', ui-monospace, monospace;
+
+  /* 文字サイズは tokens の 6 段だけ（12px 未満は 11px のラベルに限定） */
+  --text-xs: var(--font-size-12);
+  --text-xs--line-height: var(--leading-body);
+  --text-sm: var(--font-size-13);
+  --text-sm--line-height: var(--leading-body);
+  --text-base: var(--font-size-15);
+  --text-base--line-height: var(--leading-body);
+  --text-lg: var(--font-size-21);
+  --text-lg--line-height: var(--leading-heading);
+  --text-xl: var(--font-size-21);
+  --text-xl--line-height: var(--leading-heading);
+  --text-2xl: var(--font-size-32);
+  --text-2xl--line-height: var(--leading-heading);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* ルート識別（#96 で紫 1 色に統一。変数名は互換のため残す） */
+  --color-accent-violet: var(--accent-violet);
+  --color-accent-cyan: var(--accent-cyan);
+  --color-accent-magenta: var(--accent-magenta);
+  --color-accent-amber: var(--accent-amber);
+  --color-accent-emerald: var(--accent-emerald);
+  --color-accent-2: var(--accent-2);
+  --color-highlight: var(--highlight);
+  --color-warning: var(--warning);
+  --color-success: var(--success);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root,
+.dark {
+  color-scheme: dark;
+
+  --background: var(--bg);
+  --foreground: var(--text-primary);
+  --card: var(--surface);
+  --card-foreground: var(--text-primary);
+  --popover: var(--raised);
+  --popover-foreground: var(--text-primary);
+
+  /* primary = accent #7c6cff。塗りの上は黒文字（コントラスト 5.1:1） */
+  --primary: var(--brand);
+  --primary-foreground: var(--brand-contrast);
+  --secondary: rgba(255, 255, 255, 0.06);
+  --secondary-foreground: var(--text-primary);
+  --muted: rgba(255, 255, 255, 0.04);
+  --muted-foreground: var(--text-secondary);
+  /* shadcn の `--accent` はホバー背景用（ブランド色とは別スロット） */
+  --accent: rgba(124, 108, 255, 0.14);
+  --accent-foreground: var(--text-primary);
+
+  /* 機能色（状態のみ）: 危険 / 警告 / 成功 */
+  --destructive: #ff6b78;
+  --warning: #e0a94a;
+  --success: #4ecb9a;
+  --border: var(--line);
+  --input: var(--line-strong);
+  --ring: var(--brand);
+
+  /* ルート識別はアクセント 1 色に統一（色分けは廃止。#96） */
+  --accent-violet: var(--brand);
+  --accent-cyan: var(--brand);
+  --accent-magenta: var(--brand);
+  --accent-amber: var(--brand);
+  --accent-emerald: var(--brand);
+  --accent-2: var(--brand);
+  --highlight: var(--brand);
+
+  --chart-1: var(--brand);
+  --chart-2: var(--brand);
+  --chart-3: var(--brand);
+  --chart-4: var(--brand);
+  --chart-5: var(--brand);
+
+  /* カード 12px / パネル 16px の基準 */
+  --radius: var(--radius-card);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    margin: 0;
+    overflow: hidden;
+    font-family: var(--font-sans);
+    font-size: var(--font-size-13);
+    line-height: var(--leading-body);
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--brand) 35%, transparent);
+    color: var(--text-primary);
+  }
+
+  /*
+   * フォーカスは 2px リング + offset 2（#96 / #100）。
+   * `outline-none` などのユーティリティに負けないよう、実際のルールは
+   * ファイル末尾のレイヤー外（unlayered）に置いている。
+   */
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+  }
+
+  /* WebView2 / Chromium の search 入力に付くネイティブの × を消す（自前のクリアボタンを使う） */
+  input[type='search']::-webkit-search-cancel-button,
+  input[type='search']::-webkit-search-decoration {
+    appearance: none;
+    -webkit-appearance: none;
+  }
+}
+
+/*
+ * #98: サムネイル非表示が既定なので、画像なしのカードは「暗い空箱」ではなく
+ * タイトルから生成したタイポグラフィック・カバーにする。色相は
+ * `--placeholder-hue`（タイトルのハッシュ）、彩度・明度は固定。面であることは
+ * 1px の内側ボーダーで示す。
+ */
+.work-placeholder {
+  background-color: var(--surface);
+  background-image: linear-gradient(
+    155deg,
+    hsl(var(--placeholder-hue, 260) 60% 60% / 8%),
+    transparent 60%
+  );
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+/* 中央の先頭 1〜2 文字。中央からほんの少しだけ左下へずらす（「表紙」として）。 */
+.work-placeholder-initials {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-53%, -45%);
+  font-weight: 650;
+  line-height: 0.9;
+  letter-spacing: -0.03em;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.07);
+  font-feature-settings: 'ss01';
+  user-select: none;
+  pointer-events: none;
+}
+
+/*
+ * #108: 21px 以上の見出し（アプリ名・作品詳細の題名）用。
+ * 字間は -0.02em で締める。小さい見出しには使わない。
+ */
+.type-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+/* 走査中の不確定プログレスバー（状態表示） */
+@keyframes scan-bar {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* #115: トーストは下から 160ms で出る（reduce では上のルールが即時化する） */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
+ * #100: すべての操作要素のフォーカスを 2px / offset 2 に統一する。
+ *
+ * ここはレイヤー外（unlayered）に置く。Tailwind の `outline-none` は
+ * utilities レイヤーに入るため、レイヤー外のこのルールが常に勝つ。
+ * ダイアログ本体（Radix が tabIndex=-1 を付ける）は対象外。
+ */
+:where(
+    button,
+    a[href],
+    input,
+    select,
+    textarea,
+    summary,
+    [role='button'],
+    [role='option'],
+    [role='menuitem'],
+    [role='menuitemradio'],
+    [role='tab'],
+    [role='switch'],
+    [role='checkbox'],
+    [role='radio'],
+    [contenteditable='true'],
+    [tabindex]:not([tabindex='-1'])
+  ):focus-visible {
+  outline: var(--focus-width) solid var(--brand);
+  outline-offset: var(--focus-offset);
+}
+
+/* 見出しリンク用のスキップリンクなど、リング不要なものは明示的に外す。 */
+:where([data-focus-ring='none']):focus-visible {
+  outline: none;
+}
+
+/*
+ * #100: ホバー / 選択のトランジションを 160ms に統一する。
+ * 個別のユーティリティ（duration-150 など）より優先させるため unlayered。
+ * `prefers-reduced-motion: reduce` は下のルールが !important で打ち消す。
+ */
+:where(
+    button,
+    a[href],
+    input,
+    select,
+    textarea,
+    summary,
+    [role='button'],
+    [role='option'],
+    [role='menuitem'],
+    [role='menuitemradio'],
+    [role='tab'],
+    [role='switch'],
+    [role='checkbox'],
+    [role='radio'],
+    [tabindex]:not([tabindex='-1'])
+  ) {
+  transition-duration: var(--duration-fast);
+  transition-timing-function: var(--ease-standard);
+}
+
+/* #96: 動きは 160ms / cubic-bezier(.2,.7,.3,1)。reduce では即時にする。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

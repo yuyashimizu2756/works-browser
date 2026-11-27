@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+src-tauri/target/
+src-tauri/gen/schemas/
+# ffmpeg sidecar はリポジトリに置かない（docs/build.md の手順で取得する）
+src-tauri/binaries/*.exe
+.cache/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+# ビルド生成物（インストーラ）
+*.msi
+.env
+.DS_Store
+Thumbs.db

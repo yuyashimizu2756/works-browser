@@ -1,0 +1,45 @@
+name: main-moved
+
+# main が進んだとき、コンフリクトしているPRに rebase 依頼をコメントする。
+# （自動 rebase はしない: 作業中ワーカーのローカル push と衝突するため）
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Comment on conflicting PRs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open', per_page: 50,
+            })
+            let notified = 0
+            for (const pr of prs) {
+              const { data } = await github.rest.pulls.get({ owner, repo, pull_number: pr.number })
+              if (data.mergeable_state !== 'dirty') continue
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pr.number,
+                body: [
+                  '`main` が進み、このPRはコンフリクトしています。',
+                  '',
+                  '```',
+                  'git fetch origin && git merge origin/main',
+                  '# 解消後に test / build を実行して push',
+                  '```',
+                  '',
+                  '解消したら CI を再実行してください（このコメントは自動投稿です）。',
+                ].join('\n'),
+              })
+              notified += 1
+            }
+            core.info(`notified ${notified} PR(s)`)

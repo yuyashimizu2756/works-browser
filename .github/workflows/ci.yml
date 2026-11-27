@@ -1,0 +1,113 @@
+name: CI
+
+# 無料枠 (private: 2,000分/月, Windows は 2倍消費) を守るため:
+# - paths フィルタでドキュメントのみの変更はスキップ
+# - concurrency で古い実行をキャンセル
+# - キャッシュ必須 (npm / cargo)
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.*'
+      - 'tsconfig*.json'
+      - 'index.html'
+      - '.github/workflows/ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.*'
+      - 'tsconfig*.json'
+      - 'index.html'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install frontend deps
+        run: npm ci --no-audit --no-fund
+        shell: bash
+
+      - name: Typecheck
+        run: npm run typecheck
+        shell: bash
+
+      - name: Frontend unit tests
+        run: npm run test:unit
+        shell: bash
+
+      - name: Build frontend
+        run: npm run build
+        shell: bash
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # bundle.externalBin はビルド時に実ファイルの存在を要求する。
+      # CI はバンドルしない（= ffmpeg の中身を使わない）ので、105MB のダウンロードを避けて空ファイルで通す。
+      # ここでは ffmpeg を取得しないため SHA-256 検証は無い。実バイナリを取得する
+      # release.yml 側で、固定 URL と公開 checksum による検証を行う（docs/build.md, docs/release.md 参照）。
+      - name: Stub ffmpeg sidecar
+        shell: bash
+        run: |
+          mkdir -p src-tauri/binaries
+          : > src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ runner.os }}-cargo
+
+      - name: Format
+        working-directory: src-tauri
+        run: cargo fmt --all -- --check
+        shell: bash
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+        shell: bash
+
+      - name: Test
+        working-directory: src-tauri
+        run: cargo test --all
+        shell: bash
+
+      # #32: GUI / WebView を起動せず、一時 DB の初期化 → 走査 → 集計を通す。
+      - name: Smoke (headless, no window)
+        working-directory: src-tauri
+        run: cargo run --quiet --features dev-tools --bin smoke -- --json
+        shell: bash
