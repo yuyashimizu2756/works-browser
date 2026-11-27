@@ -250,9 +250,6 @@ export default function App() {
   const toggleRevealedFile = useCallback((fileId: number) => {
     setRevealedFiles((current) => toggleReveal(current, fileId))
   }, [])
-  const revealFile = useCallback((fileId: number) => {
-    setRevealedFiles((current) => (current.has(fileId) ? current : new Set(current).add(fileId)))
-  }, [])
   const toggleRevealedWork = useCallback((workId: number) => {
     setRevealedWorks((current) => toggleRevealWork(current, workId))
   }, [])
@@ -268,7 +265,6 @@ export default function App() {
       revealed: revealedFiles,
       revealedWorks,
       toggle: toggleRevealedFile,
-      reveal: revealFile,
       toggleWork: toggleRevealedWork,
     }),
     [
@@ -276,7 +272,6 @@ export default function App() {
       revealedFiles,
       revealedWorks,
       toggleRevealedFile,
-      revealFile,
       toggleRevealedWork,
     ],
   )

@@ -1,12 +1,14 @@
 /**
- * #26: 自動再生できない・シークできない動画の扱い。
+ * #26 / #29: 動画の初回再生・再試行・再生できない場合の扱い。
  *
+ * - `loadedmetadata`（readyState >= 1）で即 `play()` してバッファリングを開始
  * - `play()` の reject → `canplay` で 1 回だけ再試行
- * - それでも駄目 → 中央の再生ボタン
+ * - 3 秒たっても readyState < 3 → 中央の再生ボタン
+ * - `waiting` / `stalled` は原因追跡用に console.warn
  * - `video.seekable.length === 0` → シークバーを無効化して理由を出す
  * - `<video>` の error → 「この形式は再生できません」+ 外部プレイヤー
  */
-import { fireEvent, render, waitFor, screen } from '@testing-library/react'
+import { act, fireEvent, render, waitFor, screen } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Lightbox } from '../src/library/Lightbox'
@@ -62,22 +64,31 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
-describe('#26 起動直後の再生と再試行', () => {
-  it('canplay（readyState >= 3）まで play() を呼ばず、届いたら 1 回だけ再生する', async () => {
+describe('#29 起動直後の再生（loadedmetadata で開始）', () => {
+  it('loadedmetadata（readyState >= 1）で即 play() を呼び、canplay を待たない', async () => {
     const { video } = renderVideo()
+    Object.defineProperty(video, 'readyState', { configurable: true, value: 1 })
 
     fireEvent(video, new Event('loadedmetadata'))
-    // 初回の読み込み遅延に耐える: メタデータだけでは再生しない
-    expect(play).not.toHaveBeenCalled()
-
-    fireEvent(video, new Event('canplay'))
     await waitFor(() => expect(play).toHaveBeenCalledTimes(1))
     await waitFor(() =>
       expect(document.querySelector('[data-lightbox-play-retry]')).toBeNull(),
     )
+  })
+
+  it('再生用の <video> は preload=auto、シークプレビュー用は metadata のまま', () => {
+    const { container, video } = renderVideo()
+
+    expect(video.getAttribute('preload')).toBe('auto')
+    const preview = container.querySelector<HTMLVideoElement>(
+      'video[data-scrub-preview-video]',
+    )
+    expect(preview).not.toBeNull()
+    expect(preview?.getAttribute('preload')).toBe('metadata')
   })
 
   it('loadedmetadata を取りこぼしても canplay で 1 回だけ自動再生する', async () => {
@@ -91,22 +102,23 @@ describe('#26 起動直後の再生と再試行', () => {
     expect(play).toHaveBeenCalledTimes(1)
   })
 
-  it('canplay 後の 1 回目が reject したら、canplay で 1 回だけ再試行する', async () => {
+  it('loadedmetadata の play() が reject したら、canplay で 1 回だけ再試行する', async () => {
     play
       .mockRejectedValueOnce(new DOMException('play blocked', 'NotAllowedError'))
       .mockResolvedValue(undefined)
     const { video } = renderVideo()
+    Object.defineProperty(video, 'readyState', { configurable: true, value: 1 })
 
     fireEvent(video, new Event('loadedmetadata'))
-    expect(play).not.toHaveBeenCalled()
-
-    fireEvent(video, new Event('canplay'))
     await waitFor(() => expect(play).toHaveBeenCalledTimes(1))
 
-    // まだ canplay 前（jsdom の readyState は 0）なので、次の canplay まで待つ
-    expect(play).toHaveBeenCalledTimes(1)
+    // まだ canplay 前（readyState < 3）なので、次の canplay まで待つ
     fireEvent(video, new Event('canplay'))
     await waitFor(() => expect(play).toHaveBeenCalledTimes(2))
+
+    // 再試行は 1 回だけ
+    fireEvent(video, new Event('canplay'))
+    expect(play).toHaveBeenCalledTimes(2)
     await waitFor(() =>
       expect(document.querySelector('[data-lightbox-play-retry]')).toBeNull(),
     )
@@ -120,8 +132,7 @@ describe('#26 起動直後の再生と再試行', () => {
     Object.defineProperty(video, 'readyState', { configurable: true, value: 3 })
 
     fireEvent(video, new Event('loadedmetadata'))
-    fireEvent(video, new Event('canplay'))
-    // canplay の 1 回目 + その直後の再試行（2 回目の canplay は不要）
+    // 1 回目 + `canplay` を待たない即時の再試行
     await waitFor(() => expect(play).toHaveBeenCalledTimes(2))
     await waitFor(() =>
       expect(document.querySelector('[data-lightbox-play-retry]')).toBeNull(),
@@ -131,10 +142,9 @@ describe('#26 起動直後の再生と再試行', () => {
   it('再試行も失敗したら中央に再生ボタンを出し、押すと再生する', async () => {
     play.mockRejectedValue(new Error('play blocked'))
     const { video } = renderVideo()
+    Object.defineProperty(video, 'readyState', { configurable: true, value: 1 })
 
     fireEvent(video, new Event('loadedmetadata'))
-    // 1 回目（canplay）+ 再試行（2 回目の canplay）
-    fireEvent(video, new Event('canplay'))
     await waitFor(() => expect(play).toHaveBeenCalledTimes(1))
     fireEvent(video, new Event('canplay'))
     await waitFor(() => expect(play).toHaveBeenCalledTimes(2))
@@ -148,6 +158,40 @@ describe('#26 起動直後の再生と再試行', () => {
       expect(document.querySelector('[data-lightbox-play-retry]')).toBeNull(),
     )
     expect(play).toHaveBeenCalledTimes(3)
+  })
+
+  it('3 秒たっても readyState < 3 なら中央に再生ボタンを出して固まらない', async () => {
+    vi.useFakeTimers()
+    // 実機のデッドロックを再現する: `play()` が解決しないまま準備も進まない
+    play.mockImplementation(() => new Promise<void>(() => {}))
+    const { video } = renderVideo()
+    Object.defineProperty(video, 'readyState', { configurable: true, value: 1 })
+
+    fireEvent(video, new Event('loadedmetadata'))
+    // 再生は呼ばれているが、準備（readyState >= 3）が整わないまま 3 秒経過
+    await act(async () => {
+      vi.advanceTimersByTime(3_000)
+    })
+
+    expect(document.querySelector('[data-lightbox-play-retry]')).not.toBeNull()
+    expect(screen.getByRole('button', { name: '再生' })).toBeInTheDocument()
+  })
+
+  it('waiting / stalled を原因追跡用に console.warn へ残す', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { video } = renderVideo()
+
+    fireEvent(video, new Event('waiting'))
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('waiting'),
+      expect.objectContaining({ fileId: 7, file: 'clip.mp4' }),
+    )
+
+    fireEvent(video, new Event('stalled'))
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('stalled'),
+      expect.objectContaining({ fileId: 7, file: 'clip.mp4' }),
+    )
   })
 })
 
