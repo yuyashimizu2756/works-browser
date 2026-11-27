@@ -167,7 +167,13 @@ describe('#99 作品詳細', () => {
     expect(screen.getAllByText('未評価')).toHaveLength(1)
     expect(within(ratingRow as HTMLElement).getAllByRole('button')).toHaveLength(5)
 
-    // 星を押すと値のテキストだけが変わる
+    // 星を押すと値のテキストだけが変わる（#13: 読み込み完了を待ってから操作する）
+    await waitFor(() =>
+      expect(document.querySelector('[data-work-marks]')).toHaveAttribute(
+        'data-mark-loaded',
+        'true',
+      ),
+    )
     fireEvent.click(screen.getByRole('button', { name: '3 段階で評価' }))
     await waitFor(() => expect(screen.getByText('3 / 5')).toBeInTheDocument())
     expect(screen.queryAllByText('未評価')).toHaveLength(0)

@@ -7,6 +7,9 @@
  * #14: ベンチ / デモ（`?bench=N&demo=1`）では実 DB に書き込まない。表示は固定値
  * （`BENCH_MARK` / `BENCH_TAGS`）にし、保存系の操作は disabled + ツールチップ案内にする。
  *
+ * #13: 実 DB ではマークの読み込みが終わるまで操作させない（`loaded`）。保存に失敗したら
+ * 楽観更新を戻し、書き込み開始後に届いた GET は捨てる。
+ *
  * レイアウト（#99）: 評価は独立した行（星 + 数値 / 未評価）。お気に入り・タグ・開封数は
  * 右側の補助情報へ寄せ、星のラベルと「未評価」が重複しないようにする。
  */
@@ -58,6 +61,17 @@ export function WorkMarksBar({ workId, bench = false, rootLabel = '', meta }: Pr
   const [tags, setTags] = useState<Tag[]>(() => (bench ? BENCH_TAGS : []))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /**
+   * #13: 読み込みが終わるまでは評価・お気に入りを操作させない。
+   * 読み込み前の全量保存（`rating: null`）で既存の評価を消さないため。
+   */
+  const [loaded, setLoaded] = useState(bench)
+  const loadedRef = useRef(bench)
+  const markLoadSeq = useRef(0)
+  const markWriteSeq = useRef(0)
+  const confirmedMark = useRef<WorkMark | null>(null)
+  const workIdRef = useRef(workId)
+  workIdRef.current = workId
   // StrictMode の二重マウントでも 1 回しか数えない（作品ごとに 1 回）
   const recordedRef = useRef<number | null>(null)
 
@@ -71,41 +85,56 @@ export function WorkMarksBar({ workId, bench = false, rootLabel = '', meta }: Pr
   }, [workId])
 
   useEffect(() => {
+    markLoadSeq.current += 1
+    const generation = markLoadSeq.current
     let alive = true
     setError(null)
+    confirmedMark.current = null
     // #14: ベンチ / デモは実 DB を読み書きせず、固定値を表示する
     if (bench) {
       recordedRef.current = workId
       setMark(benchMark(workId))
+      // 固定値は読み込み済みとして扱う（操作自体は bench で無効）
+      setLoaded(true)
+      loadedRef.current = true
       return () => {
         alive = false
+        markLoadSeq.current += 1
       }
     }
+    const writeAtStart = markWriteSeq.current
     setMark(emptyMark(workId))
+    setLoaded(false)
+    loadedRef.current = false
+
+    const applyLoaded = (next: WorkMark) => {
+      if (!alive || generation !== markLoadSeq.current) return
+      // 書き込みが始まった後に届いた GET は、古い値で UI を巻き戻すので捨てる
+      if (markWriteSeq.current !== writeAtStart) return
+      confirmedMark.current = next
+      setMark(next)
+      setLoaded(true)
+      loadedRef.current = true
+    }
+    const fail = (cause: unknown) => {
+      if (!alive || generation !== markLoadSeq.current) return
+      // 読めないまま操作させない（表示だけは続ける）
+      setLoaded(false)
+      loadedRef.current = false
+      // Tauri 未接続でも表示は続ける
+      setError(describeError(cause))
+    }
+
     if (recordedRef.current !== workId) {
       recordedRef.current = workId
-      void tagData()
-        .recordOpen(workId)
-        .then((next) => {
-          if (alive) setMark(next)
-        })
-        .catch((cause: unknown) => {
-          // Tauri 未接続でも表示は続ける
-          if (alive) setError(describeError(cause))
-        })
+      void tagData().recordOpen(workId).then(applyLoaded).catch(fail)
     } else {
       // StrictMode の再マウント: 記録は増やさず、保存済みの値を読み直す
-      void tagData()
-        .getWorkMark(workId)
-        .then((next) => {
-          if (alive) setMark(next)
-        })
-        .catch(() => {
-          // 読めなくても表示は続ける
-        })
+      void tagData().getWorkMark(workId).then(applyLoaded).catch(fail)
     }
     return () => {
       alive = false
+      markLoadSeq.current += 1
     }
   }, [bench, workId])
 
@@ -119,17 +148,24 @@ export function WorkMarksBar({ workId, bench = false, rootLabel = '', meta }: Pr
     reloadTags()
   }, [bench, reloadTags])
 
-  // #71: キーボード（1〜5 / F）で評価・お気に入りが変わったら、ヘッダの星を読み直す
+  // #71: キーボード（1〜5 / F）で評価・お気に入りが変わったら、ヘッダの星を読み直す。
+  // #13: 読み込み中 / 書き込み中に届いた GET は捨てる（楽観更新を巻き戻さない）。
   useEffect(() => {
     if (bench) return
     let alive = true
+    let refreshSeq = 0
     const onMarkChanged = (event: Event) => {
       const changed = (event as CustomEvent<{ workId?: number }>).detail?.workId
       if (changed !== workId) return
+      const generation = ++refreshSeq
+      const writeAtStart = markWriteSeq.current
       void tagData()
         .getWorkMark(workId)
         .then((next) => {
-          if (alive) setMark(next)
+          if (!alive || generation !== refreshSeq) return
+          if (!loadedRef.current || markWriteSeq.current !== writeAtStart) return
+          confirmedMark.current = next
+          setMark(next)
         })
         .catch(() => {
           // 読めなくても次の操作で再取得される
@@ -142,23 +178,48 @@ export function WorkMarksBar({ workId, bench = false, rootLabel = '', meta }: Pr
     }
   }, [bench, workId])
 
+  /**
+   * #13: 楽観更新 + 最新の書き込みだけを反映 + 失敗時ロールバック。
+   * 読み込み前は入口で止める（古い `rating: null` を保存しない）。
+   */
   const change = useCallback(
     (next: { favorite: boolean; rating: number | null }) => {
       // #14: ベンチ / デモでは保存しない
       if (bench) return
+      if (!loadedRef.current) return
+      const current = mark
+      const forWork = workId
+      const fallback = confirmedMark.current ?? current
+      const seq = markWriteSeq.current + 1
+      markWriteSeq.current = seq
       setBusy(true)
       setError(null)
       setMark((prev) => ({ ...prev, ...next }))
       void tagData()
-        .setWorkMark(workId, { favorite: next.favorite, rating: next.rating, note: mark.note })
+        .setWorkMark(forWork, {
+          favorite: next.favorite,
+          rating: next.rating,
+          note: current.note,
+        })
         .then((saved) => {
+          if (workIdRef.current !== forWork) return
+          confirmedMark.current = saved
+          if (seq !== markWriteSeq.current) return
           setMark(saved)
           notifyTagsChanged()
         })
-        .catch((cause: unknown) => setError(describeError(cause)))
-        .finally(() => setBusy(false))
+        .catch((cause: unknown) => {
+          if (workIdRef.current !== forWork || seq !== markWriteSeq.current) return
+          // 楽観更新を戻す（既存の評価を消したままにしない）
+          setMark(fallback)
+          setError(`保存できませんでした: ${describeError(cause)}`)
+        })
+        .finally(() => {
+          if (workIdRef.current !== forWork || seq !== markWriteSeq.current) return
+          setBusy(false)
+        })
     },
-    [bench, mark.note, workId],
+    [bench, mark, workId],
   )
 
   return (
@@ -167,6 +228,7 @@ export function WorkMarksBar({ workId, bench = false, rootLabel = '', meta }: Pr
       data-work-marks
       data-open-count={mark.open_count}
       data-bench-locked={bench ? 'true' : undefined}
+      data-mark-loaded={loaded ? 'true' : 'false'}
       // #14: disabled なボタンは pointer-events が切れるため、領域全体で理由を案内する
       title={bench ? BENCH_SAVE_HINT : undefined}
     >
@@ -196,11 +258,13 @@ export function WorkMarksBar({ workId, bench = false, rootLabel = '', meta }: Pr
           title={
             bench
               ? BENCH_SAVE_HINT
-              : mark.favorite
-                ? 'お気に入りから外す（F）'
-                : 'お気に入りに追加（F）'
+              : loaded
+                ? mark.favorite
+                  ? 'お気に入りから外す（F）'
+                  : 'お気に入りに追加（F）'
+                : '評価を読み込んでいます…'
           }
-          disabled={bench || busy}
+          disabled={bench || !loaded || busy}
           className={cn(
             'h-5 gap-1 rounded-full px-1 text-xs font-normal',
             mark.favorite
@@ -267,13 +331,23 @@ export function WorkMarksBar({ workId, bench = false, rootLabel = '', meta }: Pr
       </div>
 
       {/* 評価（独立した行）。星は操作、右のテキストが値。 */}
-      <span className="flex items-center gap-2" data-rating-row>
+      <span
+        className="flex items-center gap-2"
+        data-rating-row
+        title={
+          bench
+            ? BENCH_SAVE_HINT
+            : loaded
+              ? undefined
+              : '評価を読み込んでいます…'
+        }
+      >
         <span className="text-xs text-[var(--text-secondary)]">評価</span>
         <RatingStars
           favorite={mark.favorite}
           rating={mark.rating}
           onChange={(next) => change({ favorite: next.favorite, rating: next.rating })}
-          disabled={bench || busy}
+          disabled={bench || !loaded || busy}
           showFavorite={false}
           showLabel={false}
         />

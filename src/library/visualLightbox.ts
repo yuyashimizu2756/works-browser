@@ -13,6 +13,8 @@ export type LightboxVisualState = {
   meta: boolean
   /** `?lightboxSlideshow=1` … スライドショー中の表示で撮る。 */
   slideshow: boolean
+  /** `?lightboxVideo=1` … 動画のプレイヤー（キー案内つき）で撮る（#15）。 */
+  video: boolean
 }
 
 export const EMPTY_LIGHTBOX_VISUAL: LightboxVisualState = {
@@ -20,6 +22,7 @@ export const EMPTY_LIGHTBOX_VISUAL: LightboxVisualState = {
   menu: false,
   meta: false,
   slideshow: false,
+  video: false,
 }
 
 export function lightboxVisualFromUrl(search = window.location.search): LightboxVisualState {
@@ -29,5 +32,6 @@ export function lightboxVisualFromUrl(search = window.location.search): Lightbox
     menu: params.get('lightboxMenu') === '1',
     meta: params.get('lightboxMeta') === '1',
     slideshow: params.get('lightboxSlideshow') === '1',
+    video: params.get('lightboxVideo') === '1',
   }
 }

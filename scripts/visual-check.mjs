@@ -54,10 +54,15 @@ const SHOTS = [
   { name: 'detail', path: '/?bench=24&detail=3&thumbs=shown', sizes: [DEFAULT_SIZE] },
   { name: 'detail-demo', path: '/?bench=24&demo=1&detail=3', sizes: [DEFAULT_SIZE] },
   // #8: ライトボックスの上部バー / `⋯` メニュー / 生成情報パネル（ベンチの URL 指定）
+  // #15: 可読性は 1440×900 / 1280×800 / 800×600 の 3 サイズで確認する
   {
     name: 'lightbox',
     path: '/?bench=24&demo=1&detail=3&thumbs=shown&lightbox=1',
-    sizes: [DEFAULT_SIZE],
+    sizes: [
+      DEFAULT_SIZE,
+      { name: '1280x800', width: 1280, height: 800 },
+      { name: '800x600', width: 800, height: 600 },
+    ],
   },
   {
     name: 'lightbox-menu',
@@ -67,6 +72,12 @@ const SHOTS = [
   {
     name: 'lightbox-meta',
     path: '/?bench=24&demo=1&detail=3&thumbs=shown&lightbox=1&lightboxMeta=1',
+    sizes: [DEFAULT_SIZE],
+  },
+  // #15: 動画プレイヤーのキー案内（Space / ←→ / Shift+←→ / Esc）
+  {
+    name: 'lightbox-video',
+    path: '/?bench=24&demo=1&detail=3&thumbs=shown&lightbox=1&lightboxVideo=1',
     sizes: [DEFAULT_SIZE],
   },
   { name: 'shield', path: '/?bench=24&shield=1', sizes: [DEFAULT_SIZE] },

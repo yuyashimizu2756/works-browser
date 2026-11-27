@@ -114,6 +114,13 @@ describe('#8 上部バーとキーボード', () => {
         'false',
       ),
     )
+    // #13: マークの読み込みが終わるまでは操作できない
+    await waitFor(() =>
+      expect(document.querySelector('[data-lightbox-marks]')).toHaveAttribute(
+        'data-lightbox-marks-loaded',
+        'true',
+      ),
+    )
 
     fireEvent.keyDown(window, { key: 'F', code: 'KeyF', shiftKey: true })
     await waitFor(() =>

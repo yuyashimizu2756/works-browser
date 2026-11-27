@@ -400,13 +400,15 @@ export function WorkDetail({
 
   /**
    * #8: `?lightbox=1` のスクショ用。ファイルが 1 件でも読めたら先頭の画像を開く
-   * （動画しか無い作品では先頭）。ユーザー操作ではないので、1 回だけ適用する。
+   * （動画しか無い作品では先頭）。#15: `?lightboxVideo=1` なら先頭の動画を開く。
+   * ユーザー操作ではないので、1 回だけ適用する。
    */
   useEffect(() => {
     if (!visualLightbox?.open || visualApplied) return
     if (lightboxIndex !== null || feed.files.length === 0) return
-    const imageIndex = feed.files.findIndex((file) => file.kind === 'image')
-    setLightboxIndex(imageIndex >= 0 ? imageIndex : 0)
+    const kind = visualLightbox.video ? 'video' : 'image'
+    const index = feed.files.findIndex((file) => file.kind === kind)
+    setLightboxIndex(index >= 0 ? index : 0)
     setVisualApplied(true)
   }, [feed.files, lightboxIndex, setLightboxIndex, visualApplied, visualLightbox])
 

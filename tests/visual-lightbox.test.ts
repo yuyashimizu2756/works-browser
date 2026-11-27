@@ -8,21 +8,26 @@ describe('visual:check 用のライトボックス初期状態', () => {
       menu: false,
       meta: false,
       slideshow: false,
+      video: false,
     })
   })
 
-  it('URL から開く・メニュー・メタ・スライドショーを指定できる', () => {
+  it('URL から開く・メニュー・メタ・スライドショー・動画を指定できる', () => {
     expect(lightboxVisualFromUrl('?lightbox=1&lightboxMenu=1')).toEqual({
       open: true,
       menu: true,
       meta: false,
       slideshow: false,
+      video: false,
     })
-    expect(lightboxVisualFromUrl('?lightbox=1&lightboxMeta=1&lightboxSlideshow=1')).toEqual({
+    expect(
+      lightboxVisualFromUrl('?lightbox=1&lightboxMeta=1&lightboxSlideshow=1&lightboxVideo=1'),
+    ).toEqual({
       open: true,
       menu: false,
       meta: true,
       slideshow: true,
+      video: true,
     })
   })
 })

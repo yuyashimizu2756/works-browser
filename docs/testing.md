@@ -150,6 +150,9 @@ npm run visual:check -- --strict
    - 作品詳細（デモ画像つき）: `/?bench=24&demo=1&detail=3`
    - ライトボックス（#8）: `/?bench=24&demo=1&detail=3&thumbs=shown&lightbox=1`
      （`&lightboxMenu=1` / `&lightboxMeta=1` でメニュー・生成情報パネルを開いた状態）
+   - ライトボックスの可読性（#15）は **1440×900 / 1280×800 / 800×600** の 3 サイズで
+     撮影（`lightbox-1440x900.png` / `lightbox-1280x800.png` / `lightbox-800x600.png`）。
+     動画のキー案内は `&lightboxVideo=1` の `lightbox-video.png` で確認する
    - シールド: `/?bench=24&shield=1`
 4. `D:\Projects\visual\<name>.png` に保存
 5. 前回の `<name>.png` とピクセル単位で比較し、差が **2% 超**なら警告

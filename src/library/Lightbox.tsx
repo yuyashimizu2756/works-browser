@@ -81,6 +81,10 @@ const SLIDESHOW_INTERVAL_MS = 3_000
 /** #8: 解除・コピーなどの短い通知を出しておく時間。 */
 const NOTICE_MS = 3_000
 
+/** #13: 通知の種類（色分け用）。音声の通知だけ既存の data 属性を残す。 */
+type NoticeTone = 'info' | 'audio' | 'error'
+type LightboxNotice = { id: number; message: string; tone: NoticeTone }
+
 /** #8: ベンチ / スクショ用のサンプル生成情報（実ファイルが無いため）。 */
 const BENCH_META: GenerationMeta = {
   prompt:
@@ -173,12 +177,19 @@ export function Lightbox({
   // #8: 作品単位のマーク（お気に入り・評価）とタグ編集
   const [mark, setMark] = useState<WorkMark | null>(null)
   const [markBusy, setMarkBusy] = useState(false)
+  /** #13: マークの読み込みが終わるまでは操作させない（既存の評価を消さない）。 */
+  const [markLoaded, setMarkLoaded] = useState(false)
+  const [markError, setMarkError] = useState<string | null>(null)
   const [tagsOpen, setTagsOpen] = useState(false)
   // #8: `⋯` メニューとスライドショー、短い通知（音声・コピー）
   const [menuOpen, setMenuOpen] = useState(visualLightbox?.menu ?? false)
   const [slideshow, setSlideshow] = useState(visualLightbox?.slideshow ?? false)
-  const [notice, setNotice] = useState<string | null>(null)
-  const [audioNotice, setAudioNotice] = useState<string | null>(null)
+  /**
+   * #13 / #15: 通知は 1 本のキューにまとめる。音声・コピー・保存失敗が同時に
+   * 起きても表示は常に 1 行（高さが変わらない）。
+   */
+  const [notices, setNotices] = useState<LightboxNotice[]>([])
+  const noticeSeq = useRef(0)
 
   /**
    * #10: `<video>` に適用する値の「現在値」。`onLoadedMetadata` は React の
@@ -203,6 +214,14 @@ export function Lightbox({
   const panDrag = useRef<{ x: number; y: number; originX: number; originY: number } | null>(null)
   /** #22: シールド前の再生状態（復帰時に戻す）。 */
   const shieldWasPlaying = useRef(false)
+
+  // #13: マークの読み込み世代 / 書き込み世代。書き込み開始後に届いた GET は捨てる。
+  const markLoadSeq = useRef(0)
+  const markWriteSeq = useRef(0)
+  /** 最後にサーバーへ保存できた値（失敗時のロールバック先）。 */
+  const confirmedMark = useRef<WorkMark | null>(null)
+  const workIdRef = useRef(workId)
+  workIdRef.current = workId
 
   const fileKind = file?.kind
   const fileId = file?.id ?? null
@@ -264,43 +283,66 @@ export function Lightbox({
     return () => video.removeEventListener('volumechange', onVolumeChange)
   }, [fileId, fileKind])
 
-  const showNotice = useCallback((message: string) => {
-    setNotice(message)
+  /** #13: 通知をキューへ積む（1 本ずつ表示するので高さは常に同じ）。 */
+  const pushNotice = useCallback((message: string, tone: NoticeTone = 'info') => {
+    noticeSeq.current += 1
+    const next: LightboxNotice = { id: noticeSeq.current, message, tone }
+    setNotices((queue) => [...queue, next])
   }, [])
 
-  // 短い通知は自動で消す（同じ文言を続けて出しても張り直す）
-  useEffect(() => {
-    if (!notice) return
-    const timer = window.setTimeout(() => setNotice(null), NOTICE_MS)
-    return () => window.clearTimeout(timer)
-  }, [notice])
+  const showNotice = useCallback(
+    (message: string) => {
+      pushNotice(message)
+    },
+    [pushNotice],
+  )
 
+  // 先頭の通知を一定時間で消す（次があれば続けて表示する）
+  const currentNotice = notices[0] ?? null
   useEffect(() => {
-    if (!audioNotice) return
-    const timer = window.setTimeout(() => setAudioNotice(null), NOTICE_MS)
+    if (!currentNotice) return
+    const timer = window.setTimeout(() => setNotices((queue) => queue.slice(1)), NOTICE_MS)
     return () => window.clearTimeout(timer)
-  }, [audioNotice])
+  }, [currentNotice])
 
-  // #8: 作品のマーク（お気に入り・評価）を読む
+  // #8 / #13: 作品のマーク（お気に入り・評価）を読む。
+  // 読み込みが終わるまでは操作させず、書き込み開始後に届いた応答は捨てる。
   useEffect(() => {
+    markLoadSeq.current += 1
+    const generation = markLoadSeq.current
     if (workId === undefined) {
       setMark(null)
+      setMarkLoaded(false)
+      setMarkError(null)
+      confirmedMark.current = null
       return
     }
-    let alive = true
+    const writeAtStart = markWriteSeq.current
     setMark(emptyMark(workId))
+    setMarkLoaded(false)
+    setMarkError(null)
+    confirmedMark.current = null
     void tagData()
       .getWorkMark(workId)
       .then((next) => {
-        if (alive) setMark(next)
+        if (generation !== markLoadSeq.current) return
+        // 書き込みが始まった後に届いた GET は、古い値で UI を巻き戻すので捨てる
+        if (markWriteSeq.current !== writeAtStart) return
+        confirmedMark.current = next
+        setMark(next)
+        setMarkLoaded(true)
       })
-      .catch(() => {
-        // 読めなくても閲覧は続けられる
+      .catch((cause: unknown) => {
+        if (generation !== markLoadSeq.current) return
+        // 読めないまま操作させない（見ているだけなら続行できる）
+        setMarkLoaded(false)
+        setMarkError(describeError(cause))
       })
     return () => {
-      alive = false
+      markLoadSeq.current += 1
     }
   }, [workId])
+
 
   const saveSnapshot = useCallback(() => {
     const state = snapshot.current
@@ -533,45 +575,71 @@ export function Lightbox({
   // #8: お気に入り・評価・タグ・メタ・スライドショー・メニュー
   // ---------------------------------------------------------------------------
 
-  /** 作品マークを 1 項目だけ変えて即保存する（評価・お気に入りは作品単位）。 */
+  /**
+   * #13: 作品マークを 1 項目だけ変えて即保存する（評価・お気に入りは作品単位）。
+   *
+   * - 読み込み完了までは呼ばない（`markLoaded` で入口を閉じる）
+   * - 楽観更新し、**最新の書き込み**の応答だけを反映する（連打で巻き戻らない）
+   * - 失敗したら最後に保存できた値へ戻して通知する
+   */
   const changeMark = useCallback(
-    (next: { favorite: boolean; rating: number | null }) => {
-      if (workId === undefined) return
+    (next: { favorite: boolean; rating: number | null }, successMessage?: string) => {
+      const current = mark
+      if (workId === undefined || !markLoaded || !current) return
+      const forWork = workId
+      // 同じ作品を見ている間だけ。別作品の遅延応答は無視する
+      const seq = markWriteSeq.current + 1
+      markWriteSeq.current = seq
+      const fallback = confirmedMark.current ?? current
       setMarkBusy(true)
-      setMark((current) => (current ? { ...current, ...next } : current))
+      setMark({ ...current, ...next })
       void tagData()
-        .setWorkMark(workId, {
+        .setWorkMark(forWork, {
           favorite: next.favorite,
           rating: next.rating,
-          note: mark?.note ?? null,
+          note: current.note ?? null,
         })
         .then((saved) => {
+          if (workIdRef.current !== forWork) return
+          confirmedMark.current = saved
+          if (seq !== markWriteSeq.current) return
           setMark(saved)
+          if (successMessage) pushNotice(successMessage)
           // 詳細ヘッダ（WorkMarksBar）とライブラリの評価フィルタへ知らせる
-          notifyMarkChanged(workId)
+          notifyMarkChanged(forWork)
           notifyTagsChanged()
         })
         .catch((cause: unknown) => {
-          showNotice(`保存できませんでした: ${describeError(cause)}`)
+          if (workIdRef.current !== forWork || seq !== markWriteSeq.current) return
+          // #13: 楽観更新を戻す（既存の評価を消したままにしない）
+          setMark(fallback)
+          pushNotice(`保存できませんでした: ${describeError(cause)}`, 'error')
         })
-        .finally(() => setMarkBusy(false))
+        .finally(() => {
+          if (workIdRef.current !== forWork || seq !== markWriteSeq.current) return
+          setMarkBusy(false)
+        })
     },
-    [mark?.note, showNotice, workId],
+    [mark, markLoaded, pushNotice, workId],
   )
 
   const toggleFavorite = useCallback(() => {
-    if (!mark) return
-    changeMark({ favorite: !mark.favorite, rating: mark.rating })
-    showNotice(mark.favorite ? 'お気に入りから外しました' : 'お気に入りに追加しました')
-  }, [changeMark, mark, showNotice])
+    if (!mark || !markLoaded) return
+    changeMark(
+      { favorite: !mark.favorite, rating: mark.rating },
+      mark.favorite ? 'お気に入りから外しました' : 'お気に入りに追加しました',
+    )
+  }, [changeMark, mark, markLoaded])
 
   const applyRating = useCallback(
     (rating: number | null) => {
-      if (!mark) return
-      changeMark({ favorite: mark.favorite, rating })
-      showNotice(rating === null ? '未評価に戻しました' : `★${rating} に評価しました`)
+      if (!mark || !markLoaded) return
+      changeMark(
+        { favorite: mark.favorite, rating },
+        rating === null ? '未評価に戻しました' : `★${rating} に評価しました`,
+      )
     },
-    [changeMark, mark, showNotice],
+    [changeMark, mark, markLoaded],
   )
 
   /** #10: ミュート解除時は音量 0 なら既定音量まで上げる（`volumeAfterMuteToggle`）。 */
@@ -581,15 +649,18 @@ export function Lightbox({
     setMuted(next.muted)
     rememberPlayback(next.volume, next.muted)
     if (next.muted) {
-      setAudioNotice('ミュートにしました')
+      pushNotice('ミュートにしました', 'audio')
       return
     }
     if (next.volume <= 0) {
-      setAudioNotice('音量が 0 のため音が出ません。音量スライダーで上げてください')
+      pushNotice('音量が 0 のため音が出ません。音量スライダーで上げてください', 'audio')
     } else {
-      setAudioNotice(`音声を有効化しました（音量 ${Math.round(next.volume * 100)}%）`)
+      pushNotice(
+        `音声を有効化しました（音量 ${Math.round(next.volume * 100)}%）`,
+        'audio',
+      )
     }
-  }, [muted, volume])
+  }, [muted, pushNotice, volume])
 
   const changeVolume = useCallback((value: number) => {
     const next = volumeAfterSlider(value)
@@ -719,19 +790,20 @@ export function Lightbox({
       // #8: ライトボックスからの操作。修飾キー付きの既存操作（Alt+← など）は
       // ここで奪わない（`matchesShortcut` が Ctrl / Alt / Meta を見る）。
       if (!event.ctrlKey && !event.altKey && !event.metaKey) {
+        // #13: 長押し（自動リピート）で評価を連打しない。読み込み前も反応しない。
         if (matchesShortcut('detail-favorite', event)) {
           event.preventDefault()
-          toggleFavorite()
+          if (!event.repeat && markLoaded) toggleFavorite()
           return
         }
         if (matchesShortcut('detail-rate', event)) {
           event.preventDefault()
-          applyRating(Number(event.key))
+          if (!event.repeat && markLoaded) applyRating(Number(event.key))
           return
         }
         if (matchesShortcut('detail-unrated', event)) {
           event.preventDefault()
-          applyRating(null)
+          if (!event.repeat && markLoaded) applyRating(null)
           return
         }
         if (matchesShortcut('detail-tags', event)) {
@@ -806,6 +878,7 @@ export function Lightbox({
     fileKind,
     goNext,
     goPrev,
+    markLoaded,
     menuOpen,
     requestDelete,
     seekBy,
@@ -872,7 +945,13 @@ export function Lightbox({
   const total = files.length
   const favorite = mark?.favorite ?? false
   const rating = mark?.rating ?? null
-  const markReady = mark !== null
+  // #13: 読み込みが終わるまでは「まだ分からない」ので操作させない
+  const markReady = mark !== null && markLoaded
+  const markHint = markReady
+    ? undefined
+    : markError
+      ? `評価を読み込めませんでした（${markError}）`
+      : '評価を読み込んでいます…'
 
   return (
     <div
@@ -913,14 +992,23 @@ export function Lightbox({
           <span className="truncate text-sm font-semibold">{file.name}</span>
         </span>
         <div className="ml-auto flex min-w-0 flex-none items-center gap-1.5">
-          <span className="hidden flex-none items-center gap-2 text-xs text-white/65 tabular-nums xl:flex">
+          {/* #15: 位置（N / 全体）は幅 800 でも常に見える。サイズ・日付は広い画面だけ。 */}
+          <span
+            className="flex flex-none items-center gap-2 text-xs text-white/65 tabular-nums"
+            data-lightbox-position
+          >
             <span>
               {index + 1} / {hasMore ? `${total}+` : total}
             </span>
-            <span aria-hidden="true">·</span>
-            <span>{formatBytes(file.bytes)}</span>
-            <span aria-hidden="true">·</span>
-            <span>{formatShortDate(file.mtime)}</span>
+            <span
+              className="hidden items-center gap-2 xl:flex"
+              data-lightbox-file-meta
+            >
+              <span aria-hidden="true">·</span>
+              <span>{formatBytes(file.bytes)}</span>
+              <span aria-hidden="true">·</span>
+              <span>{formatShortDate(file.mtime)}</span>
+            </span>
           </span>
 
           {/* #8: お気に入り・評価（作品単位） */}
@@ -930,39 +1018,54 @@ export function Lightbox({
               data-lightbox-marks
               data-lightbox-favorite={favorite ? 'true' : 'false'}
               data-lightbox-rating={rating ?? ''}
+              data-lightbox-marks-loaded={markReady ? 'true' : 'false'}
+              title={markHint}
             >
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className={cn(
-                'text-white/80 hover:bg-white/10',
-                favorite && 'text-[var(--highlight)]',
-              )}
-              aria-label={favorite ? 'お気に入りから外す（Shift+F）' : 'お気に入りに追加（Shift+F）'}
-              aria-pressed={favorite}
-              title={favorite ? 'お気に入りから外す（Shift+F）' : 'お気に入りに追加（Shift+F）'}
-              disabled={!markReady || markBusy}
-              data-lightbox-favorite-toggle
-              onClick={toggleFavorite}
-            >
-              <Heart className={cn(favorite && 'fill-current')} aria-hidden="true" />
-            </Button>
-            <RatingStars
-              favorite={favorite}
-              rating={rating}
-              onChange={(next) => changeMark({ favorite: next.favorite, rating: next.rating })}
-              disabled={!markReady || markBusy}
-              showFavorite={false}
-              showLabel={false}
-            />
-            <span
-              className="w-7 flex-none text-center text-xs text-white/65 tabular-nums"
-              aria-live="polite"
-            >
-              {rating === null ? '—' : `${rating}/5`}
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className={cn(
+                  'text-white/80 hover:bg-white/10',
+                  favorite && 'text-[var(--highlight)]',
+                )}
+                aria-label={
+                  markReady
+                    ? favorite
+                      ? 'お気に入りから外す（Shift+F）'
+                      : 'お気に入りに追加（Shift+F）'
+                    : markHint
+                }
+                aria-pressed={favorite}
+                title={
+                  markReady
+                    ? favorite
+                      ? 'お気に入りから外す（Shift+F）'
+                      : 'お気に入りに追加（Shift+F）'
+                    : markHint
+                }
+                disabled={!markReady || markBusy}
+                data-lightbox-favorite-toggle
+                onClick={toggleFavorite}
+              >
+                <Heart className={cn(favorite && 'fill-current')} aria-hidden="true" />
+              </Button>
+              <RatingStars
+                favorite={favorite}
+                rating={rating}
+                onChange={(next) => changeMark({ favorite: next.favorite, rating: next.rating })}
+                disabled={!markReady || markBusy}
+                showFavorite={false}
+                showLabel={false}
+                unratedClassName="text-white/60"
+              />
+              <span
+                className="w-7 flex-none text-center text-xs text-white/65 tabular-nums"
+                aria-live="polite"
+              >
+                {rating === null ? '—' : `${rating}/5`}
+              </span>
             </span>
-          </span>
-        )}
+          )}
 
         <Button
           variant="ghost"
@@ -987,21 +1090,6 @@ export function Lightbox({
           onClick={() => setMetaOpen((open) => !open)}
         >
           <Info />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className={cn(
-            'flex-none text-white hover:bg-white/10',
-            slideshow && 'bg-white/15 text-[var(--brand)]',
-          )}
-          aria-label={slideshow ? 'スライドショーを停止（S）' : 'スライドショー（S）'}
-          aria-pressed={slideshow}
-          title={slideshow ? 'スライドショーを停止（S）' : 'スライドショー（S）'}
-          data-lightbox-slideshow
-          onClick={toggleSlideshow}
-        >
-          <MonitorPlay />
         </Button>
         <Button
           variant="ghost"
@@ -1067,23 +1155,26 @@ export function Lightbox({
         </div>
       </div>
 
-      {/* #8: 短い通知（音声 / コピー / スライドショー） */}
-      {notice && (
+      {/*
+        #13 / #15: 音声・コピー・保存失敗の通知は 1 本のキュー。
+        同時に起きても表示は 1 行（h-7 固定）なので高さが変わらない。
+      */}
+      {currentNotice && (
         <p
-          className="m-0 flex-none border-b border-white/10 bg-black/55 px-4 py-1.5 text-xs text-white/85"
+          className={cn(
+            'm-0 flex h-7 flex-none items-center border-b border-white/10 bg-black/55 px-4 text-xs',
+            currentNotice.tone === 'audio' && 'text-[var(--brand)]',
+            currentNotice.tone === 'error' && 'text-[var(--destructive)]',
+            currentNotice.tone === 'info' && 'text-white/85',
+          )}
           role="status"
           data-lightbox-notice
+          data-lightbox-notice-tone={currentNotice.tone}
+          {...(currentNotice.tone === 'audio'
+            ? { 'data-lightbox-audio-notice': 'true' }
+            : {})}
         >
-          {notice}
-        </p>
-      )}
-      {audioNotice && (
-        <p
-          className="m-0 flex-none border-b border-white/10 bg-black/55 px-4 py-1.5 text-xs text-[var(--brand)]"
-          role="status"
-          data-lightbox-audio-notice
-        >
-          {audioNotice}
+          {currentNotice.message}
         </p>
       )}
 
@@ -1426,6 +1517,22 @@ export function Lightbox({
           <span className="ml-auto">
             ← → で移動（{index + 1} / {hasMore ? `${total}+` : total}）
           </span>
+          {/* #15: スライドショーのボタンは下部バーに 1 つだけ（画像でも使える） */}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className={cn(
+              'flex-none text-white hover:bg-white/10',
+              slideshow && 'bg-white/15 text-[var(--brand)]',
+            )}
+            aria-label={slideshow ? 'スライドショーを停止（S）' : 'スライドショー（S）'}
+            aria-pressed={slideshow}
+            title={slideshow ? 'スライドショーを停止（S）' : 'スライドショー（S）'}
+            data-lightbox-slideshow-bar
+            onClick={toggleSlideshow}
+          >
+            <MonitorPlay />
+          </Button>
         </div>
       ) : (
         <div className="flex flex-none flex-col gap-2 border-t border-white/10 bg-black/55 px-4 py-3 text-white/85">
@@ -1511,13 +1618,18 @@ export function Lightbox({
               )}
               aria-label={slideshow ? 'スライドショーを停止（S）' : 'スライドショー（S）'}
               aria-pressed={slideshow}
+              title={slideshow ? 'スライドショーを停止（S）' : 'スライドショー（S）'}
               data-lightbox-slideshow-bar
               onClick={toggleSlideshow}
             >
               <MonitorPlay />
             </Button>
-            <span className="ml-auto hidden text-xs text-white/60 lg:block">
-              Shift+F · 1〜5 · T · I · S
+            {/* #15: 動画のキー案内（画像は上のズーム案内のまま） */}
+            <span
+              className="ml-auto hidden text-xs text-white/60 xl:block"
+              data-lightbox-key-hint
+            >
+              Space 再生 / ←→ ±5秒 / Shift+←→ 前後 / Esc 閉じる
             </span>
           </div>
         </div>
