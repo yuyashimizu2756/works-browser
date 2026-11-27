@@ -16,6 +16,11 @@ type Props = {
   showLabel?: boolean
   /** ハートを星の隣に出すか（#99 の詳細ヘッダでは補助情報へ分ける）。 */
   showFavorite?: boolean
+  /**
+   * #15: 未評価の星の色。既定はパネル背景向けの控えめな色。
+   * 黒背景のライトボックスでは `text-white/60` を渡す（コントラスト 7.4:1）。
+   */
+  unratedClassName?: string
 }
 
 const RATINGS = [1, 2, 3, 4, 5] as const
@@ -27,6 +32,7 @@ export function RatingStars({
   disabled = false,
   showLabel = true,
   showFavorite = true,
+  unratedClassName = 'text-muted-foreground/45',
 }: Props) {
   return (
     <span className="flex items-center gap-0.5" data-rating-stars data-rating={rating ?? ''}>
@@ -59,7 +65,7 @@ export function RatingStars({
             data-rating-value={value}
             title={`${value} 段階（もう一度押すと未評価）`}
             disabled={disabled}
-            className={active ? 'text-[var(--warning)]' : 'text-muted-foreground/45'}
+            className={active ? 'text-[var(--warning)]' : unratedClassName}
             onClick={() =>
               onChange({ favorite, rating: rating === value ? null : value })
             }
