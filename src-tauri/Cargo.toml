@@ -33,7 +33,7 @@ rusqlite = { version = "0.43", features = ["bundled"] }
 # 繝・ぅ繝ｬ繧ｯ繝医Μ襍ｰ譟ｻ・・ollow_links(false)・・
 walkdir = "2.5"
 # #50: 初回走査のディレクトリ列挙を並列化する
-jwalk = "0.8"
+jwalk = "0.9"
 # 繝｡繧ｿ繝・・繧ｿ蜿門ｾ励・繝上ャ繧ｷ繝･遲峨・荳ｦ蛻怜喧
 rayon = "1.12"
 thiserror = "2"
