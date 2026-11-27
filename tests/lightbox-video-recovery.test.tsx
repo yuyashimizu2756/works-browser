@@ -65,19 +65,63 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('#26 play() の再試行', () => {
-  it('1 回目の reject は canplay で 1 回だけ再試行する', async () => {
+describe('#26 起動直後の再生と再試行', () => {
+  it('canplay（readyState >= 3）まで play() を呼ばず、届いたら 1 回だけ再生する', async () => {
+    const { video } = renderVideo()
+
+    fireEvent(video, new Event('loadedmetadata'))
+    // 初回の読み込み遅延に耐える: メタデータだけでは再生しない
+    expect(play).not.toHaveBeenCalled()
+
+    fireEvent(video, new Event('canplay'))
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(document.querySelector('[data-lightbox-play-retry]')).toBeNull(),
+    )
+  })
+
+  it('loadedmetadata を取りこぼしても canplay で 1 回だけ自動再生する', async () => {
+    const { video } = renderVideo()
+
+    // 初回はメタデータのイベントが React に届かないことがある。
+    // その場合でも canplay から 1 回だけ試す。
+    fireEvent(video, new Event('canplay'))
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1))
+    fireEvent(video, new Event('canplay'))
+    expect(play).toHaveBeenCalledTimes(1)
+  })
+
+  it('canplay 後の 1 回目が reject したら、canplay で 1 回だけ再試行する', async () => {
     play
       .mockRejectedValueOnce(new DOMException('play blocked', 'NotAllowedError'))
       .mockResolvedValue(undefined)
     const { video } = renderVideo()
 
     fireEvent(video, new Event('loadedmetadata'))
+    expect(play).not.toHaveBeenCalled()
+
+    fireEvent(video, new Event('canplay'))
     await waitFor(() => expect(play).toHaveBeenCalledTimes(1))
 
-    // canplay が来るまでは再試行しない
+    // まだ canplay 前（jsdom の readyState は 0）なので、次の canplay まで待つ
     expect(play).toHaveBeenCalledTimes(1)
     fireEvent(video, new Event('canplay'))
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(2))
+    await waitFor(() =>
+      expect(document.querySelector('[data-lightbox-play-retry]')).toBeNull(),
+    )
+  })
+
+  it('再生可能な状態なら、失敗直後に 1 回だけ自動で再試行する', async () => {
+    play
+      .mockRejectedValueOnce(new DOMException('play blocked', 'NotAllowedError'))
+      .mockResolvedValue(undefined)
+    const { video } = renderVideo()
+    Object.defineProperty(video, 'readyState', { configurable: true, value: 3 })
+
+    fireEvent(video, new Event('loadedmetadata'))
+    fireEvent(video, new Event('canplay'))
+    // canplay の 1 回目 + その直後の再試行（2 回目の canplay は不要）
     await waitFor(() => expect(play).toHaveBeenCalledTimes(2))
     await waitFor(() =>
       expect(document.querySelector('[data-lightbox-play-retry]')).toBeNull(),
@@ -89,6 +133,8 @@ describe('#26 play() の再試行', () => {
     const { video } = renderVideo()
 
     fireEvent(video, new Event('loadedmetadata'))
+    // 1 回目（canplay）+ 再試行（2 回目の canplay）
+    fireEvent(video, new Event('canplay'))
     await waitFor(() => expect(play).toHaveBeenCalledTimes(1))
     fireEvent(video, new Event('canplay'))
     await waitFor(() => expect(play).toHaveBeenCalledTimes(2))
@@ -149,9 +195,11 @@ describe('#26 形式非対応', () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('動画を読み込めませんでした'),
       expect.objectContaining({
+        fileId: 7,
         width: 1920,
         height: 1080,
         errorCode: 4,
+        seekableLength: 0,
         codec: expect.stringContaining('H.264'),
       }),
     )

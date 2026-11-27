@@ -61,6 +61,7 @@ export function hasSeekableRange(media: SeekableLike): boolean {
 }
 
 export type MediaFailureInfo = {
+  fileId: number
   file: string
   bytes: number
   durationMs: number | null
@@ -72,10 +73,13 @@ export type MediaFailureInfo = {
   errorMessage: string | null
   readyState: number
   networkState: number
+  /** シーク可能な範囲の数（0 は Range 非対応 / インデックス未取得）。 */
+  seekableLength: number
   cause: string | null
 }
 
 type MediaFailureSource = {
+  id: number
   name: string
   bytes: number
   duration_ms: number | null
@@ -89,6 +93,7 @@ type VideoFailureSource = {
   readyState: number
   networkState: number
   error: MediaError | null
+  seekable: TimeRanges | null
 }
 
 /** `console.warn` に渡す 1 つのオブジェクトを作る（#26）。 */
@@ -98,6 +103,7 @@ export function mediaFailureInfo(
   cause?: unknown,
 ): MediaFailureInfo {
   return {
+    fileId: file.id,
     file: file.name,
     bytes: file.bytes,
     durationMs: file.duration_ms,
@@ -108,6 +114,7 @@ export function mediaFailureInfo(
     errorMessage: video.error?.message ?? null,
     readyState: video.readyState,
     networkState: video.networkState,
+    seekableLength: video.seekable?.length ?? 0,
     cause: cause === undefined ? null : String(cause),
   }
 }

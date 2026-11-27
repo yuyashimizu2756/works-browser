@@ -61,6 +61,7 @@ describe('mediaFailureInfo', () => {
   it('サイズ・コーデック・エラーコードを 1 つにまとめる', () => {
     const info = mediaFailureInfo(
       {
+        id: 42,
         name: 'clip.mp4',
         bytes: 12_345_678,
         duration_ms: 60_000,
@@ -73,11 +74,13 @@ describe('mediaFailureInfo', () => {
         readyState: 2,
         networkState: 3,
         error: { code: 4, message: 'MEDIA_ELEMENT_ERROR: Format error' } as MediaError,
+        seekable: ranges(1, 60),
       },
       new Error('NotSupportedError'),
     )
 
     expect(info).toMatchObject({
+      fileId: 42,
       file: 'clip.mp4',
       bytes: 12_345_678,
       durationMs: 60_000,
@@ -87,6 +90,7 @@ describe('mediaFailureInfo', () => {
       errorMessage: 'MEDIA_ELEMENT_ERROR: Format error',
       readyState: 2,
       networkState: 3,
+      seekableLength: 1,
     })
     expect(info.codec).toContain('H.264')
     expect(info.cause).toContain('NotSupportedError')
@@ -94,18 +98,20 @@ describe('mediaFailureInfo', () => {
 
   it('デコード前でもファイルの記録サイズを使う', () => {
     const info = mediaFailureInfo(
-      { name: 'clip.webm', bytes: 1, duration_ms: null, width: 800, height: 600 },
+      { id: 7, name: 'clip.webm', bytes: 1, duration_ms: null, width: 800, height: 600 },
       {
         videoWidth: 0,
         videoHeight: 0,
         readyState: 0,
         networkState: 0,
         error: null,
+        seekable: ranges(0),
       },
     )
     expect(info.width).toBe(800)
     expect(info.height).toBe(600)
     expect(info.errorCode).toBeNull()
+    expect(info.seekableLength).toBe(0)
     expect(info.cause).toBeNull()
   })
 })
