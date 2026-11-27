@@ -1285,7 +1285,10 @@ export default function App() {
               onDeleteFiles={handleDeleteFiles}
               initialSelection={routeSnapshot?.selection}
               onSelectionChange={handleSelectionChange}
-              initialFilters={routeSnapshot?.filters}
+              // #9: 履歴のスナップショットに絞り込みが無い場合（古い履歴・
+              // ライトボックス経由で控え直せなかった場合）も、最後に分かっている
+              // 絞り込みへ戻す。これが無いと「すべて」に戻ってしまう。
+              initialFilters={routeSnapshot?.filters ?? libraryFiltersRef.current ?? undefined}
               onFiltersChange={handleLibraryFiltersChange}
             />
           )}
@@ -1365,12 +1368,20 @@ export default function App() {
               onClose={() => setDeleteRequest(null)}
               onConfirm={(permanent) => void confirmDelete(permanent)}
               onCancelRunning={handleCancelRunningDelete}
+              // #8: ライトボックスから削除したときは、その上に確認を出す
+              overlayClassName={route.kind === 'lightbox' ? 'z-[100]' : undefined}
+              contentClassName={route.kind === 'lightbox' ? 'z-[101]' : undefined}
             />
           </Suspense>
         )}
         {deleteReport && (
           <Suspense fallback={null}>
-            <DeleteReportDialog result={deleteReport} onClose={() => setDeleteReport(null)} />
+            <DeleteReportDialog
+              result={deleteReport}
+              onClose={() => setDeleteReport(null)}
+              overlayClassName={route.kind === 'lightbox' ? 'z-[100]' : undefined}
+              contentClassName={route.kind === 'lightbox' ? 'z-[101]' : undefined}
+            />
           </Suspense>
         )}
 

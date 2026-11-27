@@ -267,6 +267,58 @@ export const SHORTCUT_DEFINITIONS: readonly ShortcutDefinition[] = [
     keys: 'Esc',
     description: 'ライトボックスを閉じる',
   },
+  // #8: ライトボックスからの操作。`F`（全画面）・`0`（原寸 / 先頭）・`Delete`
+  // （一覧の選択削除）と衝突しないキーだけを割り当てる。未評価だけは `0` を
+  // 使えないため `Shift+0`（表示はそのまま）にしている。
+  {
+    id: 'detail-favorite',
+    group: 'detail',
+    keys: 'Shift+F',
+    description: 'お気に入りを切り替え（F は全画面）',
+    match: { key: ['f', 'F'], shift: true },
+  },
+  {
+    id: 'detail-rate',
+    group: 'detail',
+    keys: '1〜5',
+    description: '表示中の作品を 5 段階で評価',
+    match: { values: ['1', '2', '3', '4', '5'], shift: false },
+  },
+  {
+    id: 'detail-unrated',
+    group: 'detail',
+    keys: 'Shift+0',
+    description: '評価を未評価に戻す（0 は原寸 / 先頭）',
+    match: { code: ['Digit0', 'Numpad0'], shift: true },
+  },
+  {
+    id: 'detail-tags',
+    group: 'detail',
+    keys: 'T',
+    description: 'タグを編集',
+    match: { code: ['KeyT'] },
+  },
+  {
+    id: 'detail-meta',
+    group: 'detail',
+    keys: 'I',
+    description: '生成情報パネルの表示を切り替え',
+    match: { code: ['KeyI'] },
+  },
+  {
+    id: 'detail-slideshow',
+    group: 'detail',
+    keys: 'S',
+    description: 'スライドショー（3 秒送り / 動画は再生完了で次へ）',
+    match: { code: ['KeyS'] },
+  },
+  {
+    id: 'detail-trash',
+    group: 'detail',
+    keys: 'Delete',
+    description: '表示中のファイルをゴミ箱へ（確認あり・Undo 可）',
+    match: { key: 'Delete', shift: false },
+  },
 
   // ---------------------------------------------------------------------------
   // 比較・差分
