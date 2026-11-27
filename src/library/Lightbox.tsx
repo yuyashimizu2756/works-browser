@@ -31,6 +31,7 @@ import type { GenerationMeta } from '../api'
 import { reinitializeAudioOutput } from '../lib/audioOutput'
 import { formatBytes, formatDuration, formatShortDate, describeError } from '../lib/format'
 import { fileAbsolutePath } from '../lib/path'
+import { slideshowAction } from '../lib/lightbox'
 import { matchesShortcut } from '../lib/shortcuts'
 import { volumeAfterMuteToggle, volumeAfterSlider } from '../lib/volume'
 import { readPlaybackPreference, rememberPlayback } from '../settings/playback'
@@ -144,6 +145,8 @@ export function Lightbox({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
+  /** #16: メニューを閉じたあと、開いたボタンへフォーカスを戻す。 */
+  const menuTriggerRef = useRef<HTMLButtonElement | null>(null)
   /** #8: `?lightboxMeta=1` などのスクショ用初期状態（ベンチのみ）。 */
   const visualLightbox = useMemo(() => (bench ? lightboxVisualFromUrl() : null), [bench])
 
@@ -681,19 +684,28 @@ export function Lightbox({
     }
   }, [slideshow, showNotice])
 
-  // #8: スライドショー（画像は 3 秒で次へ。動画は onEnded が担当する）
+  /**
+   * #16: スライドショーの 1 ステップ。画像の 3 秒送りと動画の再生完了で同じ判定を使う。
+   * 終端では停止し、`hasMore` のあいだは追加読み込みし、読み込み中は待つ。
+   */
+  const advanceSlideshow = useCallback(() => {
+    const action = slideshowAction({
+      index,
+      count: files.length,
+      hasMore,
+      loadingMore,
+    })
+    if (action === 'next') goNext()
+    else if (action === 'load-more') onRequestMore()
+    else if (action === 'stop') setSlideshow(false)
+  }, [files.length, goNext, hasMore, index, loadingMore, onRequestMore])
+
+  // #8 / #16: スライドショー（画像は 3 秒で次へ。動画は onEnded が担当する）
   useEffect(() => {
     if (!slideshow || fileKind !== 'image') return
-    const timer = window.setTimeout(() => {
-      if (index + 1 >= files.length) {
-        if (hasMore) onRequestMore()
-        else setSlideshow(false)
-        return
-      }
-      goNext()
-    }, SLIDESHOW_INTERVAL_MS)
+    const timer = window.setTimeout(advanceSlideshow, SLIDESHOW_INTERVAL_MS)
     return () => window.clearTimeout(timer)
-  }, [slideshow, fileKind, index, files.length, hasMore, goNext, onRequestMore])
+  }, [advanceSlideshow, fileKind, slideshow])
 
   /** #8: `⋯` の「フォルダで開く」。 */
   const revealInFolder = useCallback(() => {
@@ -733,12 +745,17 @@ export function Lightbox({
     onDeleteFile(file)
   }, [file, onDeleteFile, showNotice])
 
-  // `⋯` メニューは外側クリックで閉じる（Esc は下のキー処理が 1 段だけ閉じる）
+  // `⋯` メニューは外側クリックで閉じる（Esc は下のキー処理が 1 段だけ閉じる）。
+  // #16: どちらで閉じても、開いたボタンへフォーカスを戻す。
   useEffect(() => {
     if (!menuOpen) return
+    const closeMenu = () => {
+      setMenuOpen(false)
+      menuTriggerRef.current?.focus()
+    }
     const onPointerDown = (event: PointerEvent) => {
       if (menuRef.current?.contains(event.target as Node)) return
-      setMenuOpen(false)
+      closeMenu()
     }
     document.addEventListener('pointerdown', onPointerDown)
     return () => document.removeEventListener('pointerdown', onPointerDown)
@@ -768,6 +785,8 @@ export function Lightbox({
         event.preventDefault()
         event.stopPropagation()
         setMenuOpen(false)
+        // #16: 閉じたあとは開いたボタンへ戻す（キーボードだけで往復できる）
+        menuTriggerRef.current?.focus()
         return
       }
       if (event.key === 'Escape') {
@@ -1106,6 +1125,7 @@ export function Lightbox({
         {/* #8: `⋯`（フォルダで開く / パスをコピー / ゴミ箱へ） */}
         <div ref={menuRef} className="relative flex-none">
           <Button
+            ref={menuTriggerRef}
             variant="ghost"
             size="icon-sm"
             className="text-white hover:bg-white/10"
@@ -1403,14 +1423,9 @@ export function Lightbox({
             onError={() => setVideoError(true)}
             onEnded={() => {
               saveSnapshot()
-              // #8: スライドショー中は動画の再生完了で次へ
+              // #8 / #16: スライドショー中は動画の再生完了で次へ（終端なら停止）
               if (!slideshow) return
-              if (index + 1 >= files.length) {
-                if (hasMore) onRequestMore()
-                else setSlideshow(false)
-                return
-              }
-              goNext()
+              advanceSlideshow()
             }}
           />
         )}

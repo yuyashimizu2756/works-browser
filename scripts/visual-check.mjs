@@ -9,11 +9,16 @@
  * 1. `npm run build`（tsc + vite build）
  * 2. `vite preview` を起動
  * 3. headless Chrome でライブラリ / 作品詳細 / シールドを撮影
+ *    （#16: ライトボックス系は撮影前に DOM を見て、開いていなければ失敗させる）
  * 4. `D:\Projects\visual\<name>.png` に保存し、前回の画像とピクセル差率を表示
  *    （2% を超えたら警告。`--strict` を付けると終了コード 1）
  *
  * #98: グリッドのカードは 4:3 で幅に追従するため、ライブラリのショットは
  * **1280×800 と 1920×1080 の 2 サイズ**を撮る（`--size` で片方だけにもできる）。
+ *
+ * #16: ライトボックス / `⋯` メニュー / 生成情報は **1440×900 / 1280×800 / 800×600**
+ * の 3 サイズで撮って比較する。`needs` に指定した `data-*` が DOM に無ければ、
+ * その場でエラーにする（自動オープンが壊れても気付けるように）。
  *
  * 環境変数:
  * - `CHROME_PATH`      … Chrome / Edge の実行ファイル
@@ -46,6 +51,15 @@ const GRID_SIZES = [
 ]
 /** #100: 空状態は 1280×800 の 1 サイズで揃える。 */
 const EMPTY_SIZE = GRID_SIZES[0]
+/**
+ * #16: ライトボックスの撮影サイズ。可読性（#15）と崩れを 800 / 1280 / 1440 の
+ * 3 段で見る。`lightbox` 以外のメニュー・生成情報も同じ 3 サイズで比較する。
+ */
+const LIGHTBOX_SIZES = [
+  DEFAULT_SIZE,
+  { name: '1280x800', width: 1280, height: 800 },
+  { name: '800x600', width: 800, height: 600 },
+]
 
 const SHOTS = [
   // サムネ非表示（既定）のプレースホルダと、実画像デモの両方を 2 サイズで撮る
@@ -55,30 +69,32 @@ const SHOTS = [
   { name: 'detail-demo', path: '/?bench=24&demo=1&detail=3', sizes: [DEFAULT_SIZE] },
   // #8: ライトボックスの上部バー / `⋯` メニュー / 生成情報パネル（ベンチの URL 指定）
   // #15: 可読性は 1440×900 / 1280×800 / 800×600 の 3 サイズで確認する
+  // #16: `needs` はスクショ前に DOM を確認する属性。無ければ撮影せずに失敗する
+  //      （自動オープンが壊れると、同じ絵が撮れて差分 0% で通ってしまうため）
   {
     name: 'lightbox',
     path: '/?bench=24&demo=1&detail=3&thumbs=shown&lightbox=1',
-    sizes: [
-      DEFAULT_SIZE,
-      { name: '1280x800', width: 1280, height: 800 },
-      { name: '800x600', width: 800, height: 600 },
-    ],
+    sizes: LIGHTBOX_SIZES,
+    needs: ['data-lightbox'],
   },
   {
     name: 'lightbox-menu',
     path: '/?bench=24&demo=1&detail=3&thumbs=shown&lightbox=1&lightboxMenu=1',
-    sizes: [DEFAULT_SIZE],
+    sizes: LIGHTBOX_SIZES,
+    needs: ['data-lightbox', 'data-lightbox-menu'],
   },
   {
     name: 'lightbox-meta',
     path: '/?bench=24&demo=1&detail=3&thumbs=shown&lightbox=1&lightboxMeta=1',
-    sizes: [DEFAULT_SIZE],
+    sizes: LIGHTBOX_SIZES,
+    needs: ['data-lightbox', 'data-meta-panel'],
   },
   // #15: 動画プレイヤーのキー案内（Space / ←→ / Shift+←→ / Esc）
   {
     name: 'lightbox-video',
     path: '/?bench=24&demo=1&detail=3&thumbs=shown&lightbox=1&lightboxVideo=1',
     sizes: [DEFAULT_SIZE],
+    needs: ['data-lightbox'],
   },
   { name: 'shield', path: '/?bench=24&shield=1', sizes: [DEFAULT_SIZE] },
   // #116: ヘルプ（`?`）は 1280×800 でも最終行が切れず、下端のフェードで続きが分かる
@@ -223,6 +239,48 @@ async function capture(chrome, url, target, profileDir, size) {
   if (!existsSync(target)) throw new Error(`スクリーンショットが作られませんでした: ${target}`)
 }
 
+/** 同じページの DOM（レンダー後）を取る。`--screenshot` とは別に 1 回だけ起動する。 */
+async function dumpDom(chrome, url, profileDir, size) {
+  const { stdout } = await run(chrome, [
+    '--headless=new',
+    '--disable-gpu',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-extensions',
+    `--window-size=${size.width},${size.height}`,
+    '--virtual-time-budget=6000',
+    `--user-data-dir=${profileDir}`,
+    '--dump-dom',
+    url,
+  ])
+  return stdout
+}
+
+/** `data-lightbox` のような属性が DOM にあるか（`data-lightbox-menu` とは区別する）。 */
+function domHasAttribute(html, name) {
+  return new RegExp(`\\s${name}(?=[\\s=>])`).test(html)
+}
+
+/**
+ * #16: 撮影前に「その画面が本当に出ているか」を DOM で確認する。
+ *
+ * 以前はスクショを撮るだけだったため、`?lightbox=1` の自動オープンが壊れても
+ * 背景の作品詳細が撮れて差分 0% で通ってしまった。ここで落とす。
+ */
+async function assertDom(chrome, url, profileDir, size, needs, name) {
+  if (!needs || needs.length === 0) return
+  const html = await dumpDom(chrome, url, profileDir, size)
+  for (const attribute of needs) {
+    if (!domHasAttribute(html, attribute)) {
+      throw new Error(
+        `${name}: \`${attribute}\` が DOM にありません（ライトボックスが開いていません）。` +
+          `自動オープンが壊れている可能性があります: ${url}`,
+      )
+    }
+  }
+  log(`  DOM 確認: ${needs.join(' / ')}`)
+}
+
 /** 異なるピクセルの割合（0〜1）。サイズが違えば 1。 */
 function pixelDifference(previous, next) {
   if (previous.width !== next.width || previous.height !== next.height) return 1
@@ -316,11 +374,13 @@ async function main() {
         // localStorage（サムネ表示の保存値）が次のショットへ漏れ、撮影順で
         // 結果が変わってしまう。
         const profileDir = join(tempDir, `profile-${name}`)
+        // #16: 先に DOM を確認する（開いていなければ撮影しない）
+        await assertDom(chrome, `${BASE}${shot.path}`, profileDir, size, shot.needs, name)
         await capture(chrome, `${BASE}${shot.path}`, fresh, profileDir, size)
 
         if (!existsSync(target)) {
           await copyFile(fresh, target)
-          results.push({ name, ratio: null })
+          results.push({ name, ratio: null, asserted: (shot.needs?.length ?? 0) > 0 })
           log(`  baseline を作成: ${target}`)
           continue
         }
@@ -331,7 +391,7 @@ async function main() {
         await writeDiffImage(previous, next, join(OUT_DIR, `${name}.diff.png`))
         await copyFile(target, join(OUT_DIR, `${name}.prev.png`))
         await copyFile(fresh, target)
-        results.push({ name, ratio })
+        results.push({ name, ratio, asserted: (shot.needs?.length ?? 0) > 0 })
         const percent = (ratio * 100).toFixed(2)
         const mark = ratio > THRESHOLD ? 'WARN' : 'OK'
         log(`  ${mark} 差分 ${percent}%`)
@@ -362,6 +422,10 @@ async function main() {
     if (strict) process.exitCode = 1
   } else {
     log('すべて閾値内です')
+  }
+  const asserted = results.filter((result) => result.asserted).length
+  if (asserted > 0) {
+    log(`DOM 確認: ${asserted} 枚（ライトボックス / メニュー / 生成情報が開いていること）`)
   }
   if (serverLog.includes('error')) log(`preview: ${serverLog.trim().split('\n').slice(-3).join(' / ')}`)
 }
