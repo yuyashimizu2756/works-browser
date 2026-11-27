@@ -1,7 +1,7 @@
 # ビルドと配布物の作り方
 
 `tauri build` で NSIS インストーラ・MSI・portable exe を作るまでの手順。開発環境の前提は
-[README](../README.md#必要な環境windows) を参照。
+[README](../README.md#動作環境) を参照。
 
 ## 1. 依存関係
 
