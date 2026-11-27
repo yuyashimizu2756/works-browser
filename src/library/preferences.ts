@@ -9,15 +9,18 @@ import {
 } from './shield/settings'
 
 /**
- * 表示モード・サムネ表示トグル（#21）とプライバシーシールド（#22）の保存。
+ * 表示モードとプライバシーシールド（#22）の保存。
  *
  * 正は Rust 側の `config.json`（`%APPDATA%\works-browser\config.json`）。
  * 起動直後のちらつきを避けるため、同じ内容を localStorage にも写して
  * 同期的に初期値として読む。Tauri が無いベンチ / headless では localStorage だけが残る。
+ *
+ * サムネイル表示（#21 / #22）は**保存しない**。起動のたびに必ず非表示から始め、
+ * 旧バージョンが localStorage / `config.json` に残した `thumbnailsVisible` /
+ * `thumbnails_visible` は読み捨てる（起動時の復元には使わない）。
  */
 export type LibraryPreferences = {
   viewMode: LibraryViewMode
-  thumbnailsVisible: boolean
   shield: ShieldSettings
 }
 
@@ -30,8 +33,6 @@ function normalizeViewMode(value: unknown): LibraryViewMode {
 
 const DEFAULTS: LibraryPreferences = {
   viewMode: 'works',
-  // 既定はサムネ非表示（オーナー指示）。グリッドは維持し、プレースホルダを表示する
-  thumbnailsVisible: false,
   shield: DEFAULT_SHIELD_SETTINGS,
 }
 
@@ -39,10 +40,10 @@ export function readLocalPreferences(): LibraryPreferences | null {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (!raw) return null
-    const parsed = JSON.parse(raw) as Partial<LibraryPreferences>
+    const parsed = JSON.parse(raw) as Partial<LibraryPreferences> & { thumbnailsVisible?: unknown }
+    // #22: 旧バージョンの `thumbnailsVisible` は読み捨てる（起動時は必ず非表示）
     return {
       viewMode: normalizeViewMode(parsed.viewMode),
-      thumbnailsVisible: parsed.thumbnailsVisible === true,
       shield: normalizeShieldSettings(parsed.shield),
     }
   } catch {
@@ -64,13 +65,18 @@ export async function loadPreferences(): Promise<LibraryPreferences> {
     const config = await api.loadConfig()
     const prefs: LibraryPreferences = {
       viewMode: normalizeViewMode(config.view_mode),
-      thumbnailsVisible: config.thumbnails_visible,
+      // #22: `config.thumbnails_visible`（旧キー）は読まない。互換のため
+      // config.json には残るが、起動時のサムネ表示には一切使わない。
       shield: shieldSettingsFromConfig(config),
     }
     writeLocalPreferences(prefs)
     return prefs
   } catch {
-    return readLocalPreferences() ?? DEFAULTS
+    // #22: localStorage に旧 `thumbnailsVisible` が残っていても、読み直した
+    // 内容で上書きして捨てる（次回以降も起動時は必ず非表示）。
+    const local = readLocalPreferences()
+    if (local) writeLocalPreferences(local)
+    return local ?? DEFAULTS
   }
 }
 
@@ -85,7 +91,8 @@ export async function savePreferences(prefs: LibraryPreferences): Promise<void> 
       ...current,
       // #81: タイムラインも作品 / ファイルと同じく次回起動時に復元する。
       view_mode: prefs.viewMode,
-      thumbnails_visible: prefs.thumbnailsVisible,
+      // #22: サムネイル表示は保存しない。`thumbnails_visible` は互換のため
+      // 既存値をそのまま残し（書き換えもしない）、起動時には読まない。
       ...shieldSettingsToConfig(prefs.shield),
     })
   } catch {

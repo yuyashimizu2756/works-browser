@@ -57,6 +57,8 @@ pub struct AppConfig {
     /// `works` | `files` | `timeline`。
     pub view_mode: String,
     /// false のときサムネイルを一切読まない（#21 のコンパクト表示）。
+    /// #22: 互換のため残す旧キー。UI は起動時にこの値を読まない
+    /// （表示状態は保存せず、起動ごとに必ず非表示から始める）。
     pub thumbnails_visible: bool,
     /// #22: グローバルホットキー（例 `Ctrl+Shift+P`）。
     pub shield_hotkey: String,
@@ -96,7 +98,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             view_mode: VIEW_MODE_WORKS.to_string(),
-            // 既定はサムネ非表示（グリッド＋プレースホルダ）
+            // #22: 互換のための旧キー。起動時の表示復元には使わない
             thumbnails_visible: false,
             shield_hotkey: DEFAULT_SHIELD_HOTKEY.to_string(),
             shield_hold_ms: 1_000,

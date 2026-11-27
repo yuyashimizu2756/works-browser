@@ -8,7 +8,8 @@ import { useCallback, useState } from 'react'
  * - ホバープレビューも無効になる
  * - `ThumbStatus` は非表示中に `generate_thumbs` をキックせず、購読も張らない
  *
- * 状態の保存は `preferences.ts`（`config.json`）が行う。
+ * 状態は保存しない（#22）。起動のたびに呼び出し側が必ず非表示から初期化し、
+ * セッション内のトグルだけを保持する。
  */
 export function useThumbnailVisible(defaultVisible = false) {
   const [thumbnailsVisible, setThumbnailsVisible] = useState(defaultVisible)
