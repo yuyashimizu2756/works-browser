@@ -286,6 +286,19 @@ export function Lightbox({
   const confirmedMark = useRef<WorkMark | null>(null)
   const workIdRef = useRef(workId)
   workIdRef.current = workId
+  /**
+   * #35: keydown リスナーは `useEffect` で 1 tick 遅れて登録し直される。DOM の
+   * `data-lightbox-marks-loaded` は同じコミットで `true` になるため、属性直後に
+   * キーを押すと旧クロージャ（`markLoaded=false`）が取りこぼす。リスナーからは
+   * 必ず最新値を ref で読む（DOM 属性とリスナーの状態を一致させる）。
+   */
+  const markLoadedRef = useRef(markLoaded)
+  markLoadedRef.current = markLoaded
+  /** #35: キー操作は最新レンダーのハンドラ（最新の `mark`）へ委譲する。 */
+  const markKeyActionsRef = useRef<{
+    toggleFavorite: () => void
+    applyRating: (rating: number | null) => void
+  }>({ toggleFavorite: () => {}, applyRating: () => {} })
 
   const fileKind = file?.kind
   const fileId = file?.id ?? null
@@ -845,7 +858,7 @@ export function Lightbox({
   const changeMark = useCallback(
     (next: { favorite: boolean; rating: number | null }, successMessage?: string) => {
       const current = mark
-      if (workId === undefined || !markLoaded || !current) return
+      if (workId === undefined || !markLoadedRef.current || !current) return
       const forWork = workId
       // 同じ作品を見ている間だけ。別作品の遅延応答は無視する
       const seq = markWriteSeq.current + 1
@@ -880,27 +893,28 @@ export function Lightbox({
           setMarkBusy(false)
         })
     },
-    [mark, markLoaded, pushNotice, workId],
+    [mark, pushNotice, workId],
   )
 
   const toggleFavorite = useCallback(() => {
-    if (!mark || !markLoaded) return
+    if (!mark || !markLoadedRef.current) return
     changeMark(
       { favorite: !mark.favorite, rating: mark.rating },
       mark.favorite ? 'お気に入りから外しました' : 'お気に入りに追加しました',
     )
-  }, [changeMark, mark, markLoaded])
+  }, [changeMark, mark])
 
   const applyRating = useCallback(
     (rating: number | null) => {
-      if (!mark || !markLoaded) return
+      if (!mark || !markLoadedRef.current) return
       changeMark(
         { favorite: mark.favorite, rating },
         rating === null ? '未評価に戻しました' : `★${rating} に評価しました`,
       )
     },
-    [changeMark, mark, markLoaded],
+    [changeMark, mark],
   )
+  markKeyActionsRef.current = { toggleFavorite, applyRating }
 
   /** #10: ミュート解除時は音量 0 なら既定音量まで上げる（`volumeAfterMuteToggle`）。 */
   const toggleMute = useCallback(() => {
@@ -1099,19 +1113,22 @@ export function Lightbox({
       // ここで奪わない（`matchesShortcut` が Ctrl / Alt / Meta を見る）。
       if (!event.ctrlKey && !event.altKey && !event.metaKey) {
         // #13: 長押し（自動リピート）で評価を連打しない。読み込み前も反応しない。
+        // #35: リスナーは 1 tick 遅れて再登録されるので、ref と最新ハンドラで判定する。
         if (matchesShortcut('detail-favorite', event)) {
           event.preventDefault()
-          if (!event.repeat && markLoaded) toggleFavorite()
+          if (!event.repeat && markLoadedRef.current) markKeyActionsRef.current.toggleFavorite()
           return
         }
         if (matchesShortcut('detail-rate', event)) {
           event.preventDefault()
-          if (!event.repeat && markLoaded) applyRating(Number(event.key))
+          if (!event.repeat && markLoadedRef.current)
+            markKeyActionsRef.current.applyRating(Number(event.key))
           return
         }
         if (matchesShortcut('detail-unrated', event)) {
           event.preventDefault()
-          if (!event.repeat && markLoaded) applyRating(null)
+          if (!event.repeat && markLoadedRef.current)
+            markKeyActionsRef.current.applyRating(null)
           return
         }
         if (matchesShortcut('detail-tags', event)) {
@@ -1180,18 +1197,15 @@ export function Lightbox({
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [
-    applyRating,
     close,
     confirmQueue,
     fileKind,
     goNext,
     goPrev,
-    markLoaded,
     menuOpen,
     requestDelete,
     seekBy,
     shielded,
-    toggleFavorite,
     toggleFullscreen,
     togglePlay,
     toggleSlideshow,
