@@ -163,6 +163,9 @@ describe('#13 ライトボックスのマーク', () => {
     setTagData(createTagData({ setWorkMark: setWorkMark as TagData['setWorkMark'] }))
     renderLightbox()
     await waitFor(() => expect(marks()).toHaveAttribute('data-lightbox-marks-loaded', 'true'))
+    // #35: waitFor は DOM の反映だけを見る。keydown リスナーの再登録（useEffect）が
+    // 終わるまで 1 tick 待ってからキーを送る（フルスイートでの取りこぼし防止）。
+    await act(async () => {})
 
     fireEvent.keyDown(window, { key: '3', code: 'Digit3', repeat: true })
     fireEvent.keyDown(window, { key: '3', code: 'Digit3', repeat: true })
