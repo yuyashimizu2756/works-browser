@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import {
   ChevronLeft,
@@ -293,7 +293,14 @@ export function Lightbox({
    * 必ず最新値を ref で読む（DOM 属性とリスナーの状態を一致させる）。
    */
   const markLoadedRef = useRef(markLoaded)
-  markLoadedRef.current = markLoaded
+  /**
+   * #37: レンダー中の代入ではなく commit 後に同期で更新する（破棄されたレンダーを
+   * 漏らさない）。`useLayoutEffect` はペイント前に走るので、`#35` の前提
+   * （DOM 属性 `data-lightbox-marks-loaded` と判定が一致する）は保たれる。
+   */
+  useLayoutEffect(() => {
+    markLoadedRef.current = markLoaded
+  }, [markLoaded])
   /** #35: キー操作は最新レンダーのハンドラ（最新の `mark`）へ委譲する。 */
   const markKeyActionsRef = useRef<{
     toggleFavorite: () => void
@@ -859,6 +866,9 @@ export function Lightbox({
     (next: { favorite: boolean; rating: number | null }, successMessage?: string) => {
       const current = mark
       if (workId === undefined || !markLoadedRef.current || !current) return
+      // #37: 作品を切り替えた直後に、前の作品の mark を掴んだまま書き込まない
+      // （`markLoaded` が立っていても work_id が違えば古い値）。
+      if (current.work_id !== workId) return
       const forWork = workId
       // 同じ作品を見ている間だけ。別作品の遅延応答は無視する
       const seq = markWriteSeq.current + 1
@@ -914,7 +924,10 @@ export function Lightbox({
     },
     [changeMark, mark],
   )
-  markKeyActionsRef.current = { toggleFavorite, applyRating }
+  // #37: 最新レンダーのハンドラを commit 後に同期で参照する（`#35` の stale 対策）。
+  useLayoutEffect(() => {
+    markKeyActionsRef.current = { toggleFavorite, applyRating }
+  }, [applyRating, toggleFavorite])
 
   /** #10: ミュート解除時は音量 0 なら既定音量まで上げる（`volumeAfterMuteToggle`）。 */
   const toggleMute = useCallback(() => {
@@ -1265,10 +1278,12 @@ export function Lightbox({
   const fallbackImage = file.thumb_path
   const imageUrl = image ? (imageFailed ? fallbackImage : (direct ?? fallbackImage)) : null
   const total = files.length
-  const favorite = mark?.favorite ?? false
-  const rating = mark?.rating ?? null
+  // #37: 別作品の mark を表示・保存に使わない（作品切替の取り違え保険）
+  const currentMark = mark !== null && mark.work_id === workId ? mark : null
+  const favorite = currentMark?.favorite ?? false
+  const rating = currentMark?.rating ?? null
   // #13: 読み込みが終わるまでは「まだ分からない」ので操作させない
-  const markReady = mark !== null && markLoaded
+  const markReady = currentMark !== null && markLoaded
   const markHint = markReady
     ? undefined
     : markError

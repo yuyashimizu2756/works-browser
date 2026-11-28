@@ -5,6 +5,8 @@
  * - 保存に失敗したら楽観更新を戻す
  * - 書き込み開始後に届いた GET では巻き戻らない
  * - 長押し（`event.repeat`）で連打しない
+ * - #37: キーリスナーの貼り替え前（読込直後の 1 フレーム）でも古い mark で上書きしない
+ * - #37: `work_id` が違う mark は読み込み済み扱いにしない（作品切替の保険）
  */
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -174,6 +176,99 @@ describe('#13 ライトボックスのマーク', () => {
     fireEvent.keyDown(window, { key: '3', code: 'Digit3' })
     await waitFor(() => expect(setWorkMark).toHaveBeenCalledTimes(1))
     expect(marks()).toHaveAttribute('data-lightbox-rating', '3')
+  })
+})
+
+describe('#37 マーク読み込み直後のキー入力（#35 の再発検出）', () => {
+  /**
+   * #37: `#35` の回帰テストは `await act()` でキーリスナーの貼り替えを待っていたため、
+   * 旧実装（リスナーが古い `mark` / `markLoaded` を掴む）でも通ってしまっていた。
+   *
+   * 実際のブラウザでは、`data-lightbox-marks-loaded` が `true` になった直後の
+   * 1 フレームは「DOM は新しいが keydown リスナーはまだ旧レンダーの closure」の
+   * 窓になる。ここではその窓を、**その時点で登録されていたリスナーを保持して
+   * 呼ぶ**ことで決定的に再現する（`act` が effects を流し切ってしまうため、
+   * 単に続けて `fireEvent` すると旧実装でも新しいリスナーに当たってしまう）。
+   */
+  function captureKeydownListeners() {
+    const listeners: Array<(event: KeyboardEvent) => void> = []
+    const original = window.addEventListener.bind(window)
+    vi.spyOn(window, 'addEventListener').mockImplementation(((
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ) => {
+      if (type === 'keydown' && typeof listener === 'function') {
+        listeners.push(listener as (event: KeyboardEvent) => void)
+      }
+      return original(type, listener, options)
+    }) as typeof window.addEventListener)
+    return listeners
+  }
+
+  it('評価の保存完了前にお気に入りを押しても、古い mark（rating: null）で上書きしない', async () => {
+    const firstSave = deferred<WorkMark>()
+    const payloads: Array<{ favorite: boolean; rating: number | null }> = []
+    const setWorkMark = vi.fn(
+      async (workId: number, next: { favorite: boolean; rating: number | null }) => {
+        payloads.push({ favorite: next.favorite, rating: next.rating })
+        // 1 回目（評価）は保存完了を待たせる。2 回目（お気に入り）は即座に返す。
+        if (payloads.length === 1) return firstSave.promise
+        return markOf(workId, next)
+      },
+    )
+    setTagData(
+      createTagData({
+        getWorkMark: async (workId) => markOf(workId),
+        setWorkMark: setWorkMark as TagData['setWorkMark'],
+      }),
+    )
+    const listeners = captureKeydownListeners()
+    renderLightbox()
+    await waitFor(() => expect(marks()).toHaveAttribute('data-lightbox-marks-loaded', 'true'))
+
+    // 評価を押す直前のリスナー（旧実装では古い `mark`（rating: null）を掴んでいる）
+    const staleListener = listeners[listeners.length - 1]
+
+    // 3 で評価 → 保存はまだ終わらない
+    fireEvent.keyDown(window, { key: '3', code: 'Digit3' })
+    expect(payloads[0]).toEqual({ favorite: false, rating: 3 })
+
+    // 保存完了前に Shift+F（お気に入り）。リスナー再登録前の 1 フレームを再現する。
+    act(() => {
+      staleListener(new KeyboardEvent('keydown', { key: 'F', code: 'KeyF', shiftKey: true }))
+    })
+
+    expect(setWorkMark).toHaveBeenCalledTimes(2)
+    // #37: 2 回目が古い mark を掴んでいたら rating が null になり、評価 3 が消える
+    expect(payloads[1]).toEqual({ favorite: true, rating: 3 })
+
+    await act(async () => {
+      firstSave.resolve(markOf(7, { rating: 3 }))
+    })
+    await waitFor(() => expect(marks()).toHaveAttribute('data-lightbox-rating', '3'))
+    expect(marks()).toHaveAttribute('data-lightbox-favorite', 'true')
+  })
+
+  it('work_id が一致しない mark では読み込み済みにせず、キー操作も保存しない', async () => {
+    const setWorkMark = vi.fn(async (workId: number, next: Partial<WorkMark>) =>
+      markOf(workId, next),
+    )
+    setTagData(
+      createTagData({
+        // #37: 作品切替の取り違えを想定（別作品の mark が返る）
+        getWorkMark: async () => markOf(8, { favorite: true, rating: 5 }),
+        setWorkMark: setWorkMark as TagData['setWorkMark'],
+      }),
+    )
+    renderLightbox()
+
+    await act(async () => {})
+    expect(marks()).toHaveAttribute('data-lightbox-marks-loaded', 'false')
+
+    fireEvent.keyDown(window, { key: '3', code: 'Digit3' })
+    fireEvent.keyDown(window, { key: 'F', code: 'KeyF', shiftKey: true })
+    expect(setWorkMark).not.toHaveBeenCalled()
   })
 })
 
